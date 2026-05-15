@@ -1,5 +1,6 @@
 mod calibration;
 mod dimensions;
+mod douyin;
 mod prediction;
 mod retro_import;
 mod rubric;
@@ -68,6 +69,10 @@ enum Commands {
         propose: bool,
         #[arg(long)]
         apply: Option<i64>,
+    },
+    Douyin {
+        #[command(subcommand)]
+        command: douyin::DouyinCommand,
     },
     Candidates {
         #[command(subcommand)]
@@ -268,6 +273,9 @@ fn main() -> Result<()> {
                 }
                 _ => anyhow::bail!("use either upgrade --propose or upgrade --apply <id>"),
             }
+        }
+        Commands::Douyin { command } => {
+            douyin::handle(command)?;
         }
         Commands::Candidates { command } => {
             let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;

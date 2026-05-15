@@ -322,6 +322,63 @@ fn retro_import_rejects_duplicate_prediction_by_default() {
 }
 
 #[test]
+fn douyin_help_lists_subcommands() {
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .args(["douyin", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("doctor"))
+        .stdout(predicate::str::contains("login"))
+        .stdout(predicate::str::contains("fetch"));
+}
+
+#[test]
+fn douyin_fetch_parses_flags_then_returns_stub_error() {
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .args([
+            "douyin",
+            "fetch",
+            "pred_1",
+            "7333333333333333333",
+            "--no-import",
+            "--dry-run",
+            "--replace",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "douyin fetch stub for prediction pred_1",
+        ))
+        .stdout(predicate::str::contains("input: 7333333333333333333"))
+        .stdout(predicate::str::contains("no-import: true"))
+        .stdout(predicate::str::contains("dry-run: true"))
+        .stdout(predicate::str::contains("replace: true"))
+        .stderr(predicate::str::contains(
+            "adapter fetch is not implemented yet",
+        ));
+}
+
+#[test]
+fn douyin_fetch_rejects_unsupported_url_input() {
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .args([
+            "douyin",
+            "fetch",
+            "pred_1",
+            "https://example.com/video/7333333333333333333",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("unsupported Douyin input")
+                .or(predicate::str::contains("Douyin")),
+        );
+}
+
+#[test]
 fn calibrate_and_upgrade_work() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
