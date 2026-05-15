@@ -101,7 +101,9 @@ pub fn propose_weights(current: &Rubric, report: &CalibrationReport) -> BTreeMap
         let Some(ratio) = item.ratio else {
             continue;
         };
-        let entry = weights.entry(item.dimension.code().to_string()).or_insert(1.0);
+        let entry = weights
+            .entry(item.dimension.code().to_string())
+            .or_insert(1.0);
         if ratio >= 1.5 {
             *entry = (*entry + 0.2).min(2.0);
         } else if ratio < 0.8 {
