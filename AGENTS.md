@@ -23,6 +23,7 @@ This project is not a Codex/Claude skill by itself. The CLI is the durable local
    - We borrowed the seven-dimension starter rubric: `ER`, `HP`, `QL`, `NA`, `AB`, `SR`, `SAT`.
    - We borrowed the discipline that predictions must be written before seeing real performance data.
    - We are not directly cloning its skill ecosystem; we are implementing a smaller, local, product-like CLI.
+   - Attribution: thank `XBuilderLAB/cheat-on-content` and its creator in public project docs.
 
 3. **Codex skill bridge (`~/.codex/skills/content-score`)**
    - Turns user requests like "score this Douyin script" or "data is back, do retro" into `content-score` CLI calls.
@@ -31,6 +32,7 @@ This project is not a Codex/Claude skill by itself. The CLI is the durable local
 4. **Future Douyin import/crawling work**
    - `cheat-on-content/adapters/perf-data/douyin-session` is the reference for possible Playwright/session-based Douyin Creator Center data capture.
    - First priority is not full browser automation. First priority is batch retro import from CSV/JSON because it is simpler, testable, and immediately useful.
+   - `TrendRadar` is a reference direction for trend-source integration, not a current dependency.
 
 ## Current Architecture
 

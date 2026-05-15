@@ -2,6 +2,10 @@
 name = "content-score"
 version = "0.1.0"
 edition = "2021"
+description = "Local Rust CLI for content scoring, prediction logging, retros, calibration, and rubric upgrades."
+license = "MIT"
+repository = "https://github.com/tentenbyte/content-score"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1"

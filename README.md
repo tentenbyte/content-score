@@ -2,6 +2,19 @@
 
 Local Rust CLI for content scoring, prediction logging, retros, calibration, and confirmed rubric upgrades.
 
+`content-score` is an independent local CLI inspired by
+[`XBuilderLAB/cheat-on-content`](https://github.com/XBuilderLAB/cheat-on-content).
+Thanks to XBuilderLAB and the Cheat on Content creator for the core idea of
+turning creator judgment into a measurable loop:
+
+```text
+score -> predict -> publish -> retro -> calibrate -> upgrade
+```
+
+This project does not vendor the original skill implementation. It rebuilds the
+workflow as a small Rust CLI with local SQLite storage and an optional Codex
+skill bridge.
+
 ## Build
 
 ```bash
@@ -129,3 +142,16 @@ content-score upgrade --apply 1
 ```
 
 The first version only adjusts weights conservatively. It never silently changes the active rubric.
+
+## Acknowledgements
+
+- [`XBuilderLAB/cheat-on-content`](https://github.com/XBuilderLAB/cheat-on-content)
+  for the scoring, blind-prediction, retro, and rubric-evolution loop that
+  inspired this project.
+- [`sansan0/TrendRadar`](https://github.com/sansan0/TrendRadar) as a useful
+  reference direction for future trend-source integrations. `content-score`
+  currently does not depend on TrendRadar code.
+
+## License
+
+MIT.
