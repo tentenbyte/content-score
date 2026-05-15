@@ -1,5 +1,6 @@
 use crate::dimensions::Dimension;
 use crate::score::ScoreSet;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -21,6 +22,18 @@ impl Rubric {
             version: "v0".to_string(),
             weights,
         }
+    }
+
+    pub fn from_code_weights(version: String, weights: BTreeMap<String, f64>) -> Result<Rubric> {
+        let mut parsed = BTreeMap::new();
+        for (code, weight) in weights {
+            parsed.insert(Dimension::parse(&code)?, weight);
+        }
+
+        Ok(Rubric {
+            version,
+            weights: parsed,
+        })
     }
 
     pub fn composite(&self, scores: &ScoreSet) -> f64 {

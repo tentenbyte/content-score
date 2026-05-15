@@ -1,4 +1,5 @@
 use crate::rubric::Rubric;
+use crate::score::ScoreSet;
 use anyhow::Result;
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -51,6 +52,102 @@ pub fn open_project(root: &Path) -> Result<(ProjectPaths, Connection)> {
     let conn = Connection::open(&paths.db_path)?;
     migrate(&conn)?;
     Ok((paths, conn))
+}
+
+pub fn active_rubric(conn: &Connection) -> Result<Rubric> {
+    let (version, weights_json): (String, String) = conn.query_row(
+        "SELECT version, weights_json FROM rubric_versions WHERE active = 1 LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let weights = serde_json::from_str(&weights_json)?;
+    Rubric::from_code_weights(version, weights)
+}
+
+pub fn insert_score_run(
+    conn: &Connection,
+    target_type: &str,
+    target_ref: &str,
+    rubric: &Rubric,
+    scores: &ScoreSet,
+    composite: f64,
+) -> Result<i64> {
+    conn.execute(
+        r#"
+        INSERT INTO score_runs
+            (target_type, target_ref, rubric_version, scores_json, composite, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "#,
+        params![
+            target_type,
+            target_ref,
+            rubric.version,
+            scores.to_json_string()?,
+            composite,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn add_candidate(conn: &Connection, text: &str) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO candidates (text, created_at) VALUES (?1, ?2)",
+        params![text, Utc::now().to_rfc3339()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn score_candidate(
+    conn: &Connection,
+    candidate_id: i64,
+    scores: &ScoreSet,
+    composite: f64,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE candidates
+        SET score_json = ?1, composite = ?2, scored_at = ?3
+        WHERE id = ?4
+        "#,
+        params![
+            scores.to_json_string()?,
+            composite,
+            Utc::now().to_rfc3339(),
+            candidate_id
+        ],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct CandidateSummary {
+    pub id: i64,
+    pub text: String,
+    pub composite: Option<f64>,
+}
+
+pub fn list_candidates(conn: &Connection) -> Result<Vec<CandidateSummary>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, text, composite
+        FROM candidates
+        ORDER BY composite DESC NULLS LAST, id ASC
+        "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(CandidateSummary {
+            id: row.get(0)?,
+            text: row.get(1)?,
+            composite: row.get(2)?,
+        })
+    })?;
+
+    let mut candidates = Vec::new();
+    for row in rows {
+        candidates.push(row?);
+    }
+    Ok(candidates)
 }
 
 fn migrate(conn: &Connection) -> Result<()> {

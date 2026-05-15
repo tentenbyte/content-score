@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::fs;
 use tempfile::tempdir;
 
 #[test]
@@ -16,4 +17,72 @@ fn init_creates_local_project() {
 
     assert!(temp.path().join(".content-score/content.sqlite").exists());
     assert!(temp.path().join(".content-score/rubric.toml").exists());
+}
+
+#[test]
+fn score_and_candidates_work() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    fs::create_dir_all(temp.path().join("scripts")).unwrap();
+    fs::write(
+        temp.path().join("scripts/foo.md"),
+        "第七页 PPT 上突然出现一只加油猫猫。",
+    )
+    .unwrap();
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "score",
+            "scripts/foo.md",
+            "--scores",
+            "ER=4,HP=5,QL=3,NA=3,AB=4,SR=2,SAT=1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("composite: 6.29 / 10"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "candidates",
+            "add",
+            "AI makes one-person companies possible",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("candidate #1"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "candidates",
+            "score",
+            "1",
+            "--scores",
+            "ER=3,HP=4,QL=3,NA=2,AB=5,SR=4,SAT=1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("candidate_score"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["candidates", "top"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "AI makes one-person companies possible",
+        ))
+        .stdout(predicate::str::contains("candidate_score"));
 }
