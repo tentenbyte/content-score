@@ -1,0 +1,4 @@
+interface:
+  display_name: "Content Score"
+  short_description: "Score, predict, retro, and calibrate content."
+  default_prompt: "Use $content-score to score my Douyin script and create a pre-publication prediction."

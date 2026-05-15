@@ -35,6 +35,26 @@ This creates:
 predictions/
 ```
 
+## Codex Skill
+
+This repository includes the matching Codex skill:
+
+```text
+skills/content-score/
+  SKILL.md
+  agents/openai.yaml
+  references/scoring.md
+```
+
+To install it locally from a clone:
+
+```bash
+mkdir -p "$HOME/.codex/skills"
+ln -s "$(pwd)/skills/content-score" "$HOME/.codex/skills/content-score"
+```
+
+If `~/.codex/skills/content-score` already exists, move or remove the old local copy before linking. The skill is a workflow bridge; the Rust CLI remains the durable system of record.
+
 ## Score A Script
 
 Manual scores:

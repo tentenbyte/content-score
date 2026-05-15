@@ -28,6 +28,7 @@ This project is not a Codex/Claude skill by itself. The CLI is the durable local
 3. **Codex skill bridge (`~/.codex/skills/content-score`)**
    - Turns user requests like "score this Douyin script" or "data is back, do retro" into `content-score` CLI calls.
    - The skill must not replace the CLI with chat-only analysis.
+   - The repository copy lives at `skills/content-score`; keep it in sync with the installed local skill.
 
 4. **Future Douyin import/crawling work**
    - `cheat-on-content/adapters/perf-data/douyin-session` is the reference for possible Playwright/session-based Douyin Creator Center data capture.
@@ -48,6 +49,9 @@ Main source files:
 - `src/calibration.rs`: completed-sample analysis and conservative weight proposal logic.
 - `src/upgrade.rs`: rubric version increment logic.
 - `tests/cli_smoke.rs`: end-to-end CLI smoke tests.
+- `skills/content-score/SKILL.md`: distributable Codex skill for invoking the CLI.
+- `skills/content-score/agents/openai.yaml`: UI metadata for the packaged skill.
+- `skills/content-score/references/scoring.md`: score JSON and dimension guidance for the skill.
 
 Local user project state:
 
@@ -140,6 +144,7 @@ composite = (ER + HP + QL + NA + AB + SR + SAT) / 7 * 2.0
 
 ### Codex Skill Integration
 
+- Added distributable skill files under `skills/content-score/`.
 - Created `~/.codex/skills/content-score/SKILL.md`.
 - Added `~/.codex/skills/content-score/references/scoring.md`.
 - Validated skill structure with `quick_validate.py`.
