@@ -181,7 +181,7 @@ content-score douyin login
 content-score douyin fetch <prediction-id> <url-or-aweme-id>
 ```
 
-Run `doctor` first when the environment is unknown. Run `login` only when the user needs to establish or refresh a user-authorized Douyin session.
+Run `doctor` first when the environment is unknown. Run `login` only inside an initialized content-score project when the user needs to establish or refresh a user-authorized Douyin session; the CLI keeps adapter auth/debug state under that current project.
 
 `fetch` writes `.content-score/imports/douyin-<prediction-id>.json` and imports it by default through the standard retro import path. Default duplicate behavior rejects a second retro for the same prediction.
 

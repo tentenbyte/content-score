@@ -66,21 +66,41 @@ pub fn import_file(root: &Path, conn: &Connection, path: &Path) -> Result<Import
     import_file_with_options(root, conn, path, ImportOptions::default())
 }
 
+pub fn validate_file(root: &Path, conn: &Connection, path: &Path) -> Result<ImportSummary> {
+    let rows = read_import_rows(path)?;
+
+    let mut summary = ImportSummary::default();
+    for (index, row) in rows.into_iter().enumerate() {
+        let row_number = index + 1;
+        let prediction_id = row.prediction_id.clone();
+        match validate_import_row(root, conn, &row) {
+            Ok(contaminated) => {
+                summary.imported += 1;
+                if contaminated {
+                    summary.contaminated += 1;
+                }
+            }
+            Err(error) => {
+                summary.failed += 1;
+                summary.failures.push(ImportFailure {
+                    row_number,
+                    prediction_id,
+                    error: error.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(summary)
+}
+
 pub fn import_file_with_options(
     root: &Path,
     conn: &Connection,
     path: &Path,
     options: ImportOptions,
 ) -> Result<ImportSummary> {
-    let rows = match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("json") => read_json_rows(path)?,
-        _ => read_csv_rows(path)?,
-    };
+    let rows = read_import_rows(path)?;
 
     let mut summary = ImportSummary::default();
     for (index, row) in rows.into_iter().enumerate() {
@@ -105,6 +125,19 @@ pub fn import_file_with_options(
     }
 
     Ok(summary)
+}
+
+fn read_import_rows(path: &Path) -> Result<Vec<ImportRow>> {
+    let rows = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("json") => read_json_rows(path)?,
+        _ => read_csv_rows(path)?,
+    };
+    Ok(rows)
 }
 
 fn read_csv_rows(path: &Path) -> Result<Vec<ImportRow>> {
@@ -155,7 +188,29 @@ fn import_row(
     row: ImportRow,
     options: ImportOptions,
 ) -> Result<bool> {
-    validate_row(&row)?;
+    let contaminated = validate_import_row(root, conn, &row)?;
+
+    if storage::retro_exists(conn, &row.prediction_id)? {
+        if !options.replace_existing {
+            return Err(anyhow!(
+                "prediction already has a retro: {}",
+                row.prediction_id
+            ));
+        }
+        let tx = conn.unchecked_transaction()?;
+        storage::delete_retros_for_prediction(&tx, &row.prediction_id)?;
+        storage::insert_retro(&tx, &retro_input(row, contaminated))?;
+        tx.commit()?;
+        return Ok(contaminated);
+    }
+
+    storage::insert_retro(conn, &retro_input(row, contaminated))?;
+
+    Ok(contaminated)
+}
+
+fn validate_import_row(root: &Path, conn: &Connection, row: &ImportRow) -> Result<bool> {
+    validate_row(row)?;
     if !storage::prediction_exists(conn, &row.prediction_id)? {
         return Err(anyhow!("prediction not found: {}", row.prediction_id));
     }
@@ -169,34 +224,21 @@ fn import_row(
             prediction_path.display()
         )
     })?;
-    let contaminated = expected_hash != actual_hash;
+    Ok(expected_hash != actual_hash)
+}
 
-    if storage::retro_exists(conn, &row.prediction_id)? {
-        if !options.replace_existing {
-            return Err(anyhow!(
-                "prediction already has a retro: {}",
-                row.prediction_id
-            ));
-        }
-        storage::delete_retros_for_prediction(conn, &row.prediction_id)?;
+fn retro_input(row: ImportRow, contaminated: bool) -> storage::RetroInput {
+    storage::RetroInput {
+        prediction_id: row.prediction_id,
+        plays: row.plays,
+        likes: row.likes,
+        comments: row.comments,
+        shares: row.shares,
+        saves: row.saves,
+        top_comments: row.top_comments,
+        notes: row.notes,
+        contaminated,
     }
-
-    storage::insert_retro(
-        conn,
-        &storage::RetroInput {
-            prediction_id: row.prediction_id,
-            plays: row.plays,
-            likes: row.likes,
-            comments: row.comments,
-            shares: row.shares,
-            saves: row.saves,
-            top_comments: row.top_comments,
-            notes: row.notes,
-            contaminated,
-        },
-    )?;
-
-    Ok(contaminated)
 }
 
 fn validate_row(row: &ImportRow) -> Result<()> {
@@ -256,6 +298,53 @@ mod tests {
         let samples = storage::completed_samples(&conn).unwrap();
         assert_eq!(samples.len(), 1);
         assert_eq!(samples[0].plays, 1800);
+    }
+
+    #[test]
+    fn import_with_replace_rolls_back_when_insert_fails() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        storage::init_project(root).unwrap();
+        let (_paths, conn) = storage::open_project(root).unwrap();
+        let prediction_id = create_prediction(root, &conn);
+
+        let first_path = root.join("first.json");
+        let second_path = root.join("second.json");
+        write_retro_json(&first_path, &prediction_id, 1200);
+        write_retro_json(&second_path, &prediction_id, 1800);
+
+        let first = import_file(root, &conn, &first_path).unwrap();
+        assert_eq!(first.imported, 1);
+        assert_eq!(first.failed, 0);
+
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER fail_retro_insert
+            BEFORE INSERT ON retros
+            BEGIN
+                SELECT RAISE(FAIL, 'forced insert failure');
+            END;
+            "#,
+        )
+        .unwrap();
+
+        let second = import_file_with_options(
+            root,
+            &conn,
+            &second_path,
+            ImportOptions {
+                replace_existing: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.failed, 1);
+
+        conn.execute_batch("DROP TRIGGER fail_retro_insert;")
+            .unwrap();
+        let samples = storage::completed_samples(&conn).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].plays, 1200);
     }
 
     fn create_prediction(root: &Path, conn: &Connection) -> String {

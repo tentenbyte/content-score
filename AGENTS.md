@@ -182,6 +182,8 @@ composite = (ER + HP + QL + NA + AB + SR + SAT) / 7 * 2.0
 - Fetch imports by default through the same retro import path.
 - `--no-import` and `--dry-run` keep the JSON backup without recording a retro.
 - `--replace` replaces an existing retro for the prediction.
+- `doctor` reports project and ignore-file status before delegating dependency checks to the adapter.
+- `login` and `fetch` run inside an initialized content project; Rust passes the current project root to the adapter as `CONTENT_SCORE_PROJECT_ROOT`.
 - Auth/session data stays in the user's project `.auth/`; debug files stay under `.content-score/douyin-debug/`.
 
 ### Verification
@@ -197,8 +199,8 @@ python3 -m unittest discover adapters/douyin-session/tests -v
 
 Current automated suite shape:
 
-- 12 Rust unit tests.
-- 22 Rust CLI smoke tests.
+- 13 Rust unit tests.
+- 28 Rust CLI smoke tests.
 - 9 Python adapter normalization tests under `adapters/douyin-session/tests`.
 - Live Douyin login/fetch has not been verified in this environment because Playwright/Chromium/login state is not installed here.
 

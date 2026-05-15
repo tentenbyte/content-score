@@ -163,6 +163,8 @@ content-score douyin login
 content-score douyin fetch <prediction-id> <url-or-id>
 ```
 
+Run these commands inside an initialized `content-score` project. `doctor` reports project/dependency status, `login` requires `.content-score/content.sqlite`, and the CLI passes the current project root to the adapter so `.auth/` and debug files stay local to that project.
+
 `fetch` accepts a raw aweme id, a long Douyin video URL, or a `v.douyin.com` short link. By default it writes a JSON backup to `.content-score/imports/douyin-<prediction-id>.json` and imports that file through the normal retro import path.
 
 Fetch options:
@@ -180,6 +182,8 @@ source .venv/bin/activate
 pip install -r "$CONTENT_SCORE_REPO/adapters/douyin-session/requirements.txt"
 python -m playwright install chromium
 ```
+
+For adapter development or tests, `CONTENT_SCORE_DOUYIN_ADAPTER=/path/to/cli.py` overrides the repository adapter path.
 
 `content-score douyin login` stores the browser session under `.auth/`. Fetch failures may write captured diagnostic files under `.content-score/douyin-debug/`. Treat both paths as local-only data; do not commit them.
 

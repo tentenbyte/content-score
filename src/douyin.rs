@@ -23,8 +23,8 @@ pub enum DouyinCommand {
 
 pub fn handle(command: DouyinCommand) -> Result<()> {
     match command {
-        DouyinCommand::Doctor => run_adapter_command("doctor"),
-        DouyinCommand::Login => run_adapter_command("login"),
+        DouyinCommand::Doctor => doctor(),
+        DouyinCommand::Login => login(),
         DouyinCommand::Fetch {
             prediction_id,
             input,
@@ -43,6 +43,18 @@ pub fn handle(command: DouyinCommand) -> Result<()> {
     }
 }
 
+fn doctor() -> Result<()> {
+    let root = std::env::current_dir()?;
+    print_project_status(&root);
+    run_adapter(&root, [OsString::from("doctor")])
+}
+
+fn login() -> Result<()> {
+    let root = std::env::current_dir()?;
+    ensure_project_database(&root)?;
+    run_adapter(&root, [OsString::from("login")])
+}
+
 fn fetch(
     prediction_id: String,
     input: String,
@@ -52,13 +64,7 @@ fn fetch(
 ) -> Result<()> {
     let adapter_input = resolve_aweme_id(&input)?;
     let root = std::env::current_dir()?;
-    let paths = storage::ProjectPaths::from_root(&root);
-    if !paths.db_path.exists() {
-        anyhow::bail!(
-            "content project database not found: {}",
-            paths.db_path.display()
-        );
-    }
+    let paths = ensure_project_database(&root)?;
     let (_paths, conn) = storage::open_project(&root)?;
     if !storage::prediction_exists(&conn, &prediction_id)? {
         anyhow::bail!("prediction not found: {prediction_id}");
@@ -79,7 +85,7 @@ fn fetch(
     )?;
 
     println!("json: {}", output_path.display());
-    validate_adapter_output(&output_path, &prediction_id)?;
+    validate_adapter_output(&root, &conn, &output_path, &prediction_id)?;
     if dry_run {
         println!("dry-run: yes");
         println!("imported: no");
@@ -119,11 +125,6 @@ fn fetch(
     }
 }
 
-fn run_adapter_command(command: &str) -> Result<()> {
-    let root = std::env::current_dir()?;
-    run_adapter(&root, [OsString::from(command)])
-}
-
 fn fetch_adapter_args(
     adapter_input: &str,
     prediction_id: &str,
@@ -148,6 +149,7 @@ where
     let status = Command::new(&python)
         .arg(&adapter_path)
         .args(args)
+        .env("CONTENT_SCORE_PROJECT_ROOT", root)
         .status()
         .with_context(|| {
             format!(
@@ -164,7 +166,12 @@ where
     Ok(())
 }
 
-fn validate_adapter_output(path: &Path, prediction_id: &str) -> Result<()> {
+fn validate_adapter_output(
+    root: &Path,
+    conn: &rusqlite::Connection,
+    path: &Path,
+    prediction_id: &str,
+) -> Result<()> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read Douyin adapter output {}", path.display()))?;
     let value: serde_json::Value = serde_json::from_str(&content)
@@ -183,12 +190,23 @@ fn validate_adapter_output(path: &Path, prediction_id: &str) -> Result<()> {
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("adapter output row must be a JSON object"))?;
     match row.get("prediction_id").and_then(|value| value.as_str()) {
-        Some(actual) if actual == prediction_id => Ok(()),
+        Some(actual) if actual == prediction_id => {}
         Some(actual) => anyhow::bail!(
             "adapter output prediction_id mismatch: expected {prediction_id}, got {actual}"
         ),
         None => anyhow::bail!("adapter output prediction_id is missing or not a string"),
     }
+
+    let validation = retro_import::validate_file(root, conn, path)?;
+    if let Some(failure) = validation.failures.first() {
+        anyhow::bail!(
+            "adapter output row {} {}: {}",
+            failure.row_number,
+            failure.prediction_id,
+            failure.error
+        );
+    }
+    Ok(())
 }
 
 fn adapter_path() -> Result<PathBuf> {
@@ -199,6 +217,17 @@ fn adapter_path() -> Result<PathBuf> {
         }
         anyhow::bail!(
             "Douyin adapter path from CONTENT_SCORE_DOUYIN_ADAPTER does not exist: {}",
+            path.display()
+        );
+    }
+
+    if let Ok(repo) = std::env::var("CONTENT_SCORE_REPO") {
+        let path = PathBuf::from(repo).join("adapters/douyin-session/cli.py");
+        if path.exists() {
+            return Ok(path);
+        }
+        anyhow::bail!(
+            "Douyin adapter path from CONTENT_SCORE_REPO does not exist: {}",
             path.display()
         );
     }
@@ -218,6 +247,52 @@ fn python_command(root: &Path) -> PathBuf {
     } else {
         PathBuf::from("python3")
     }
+}
+
+fn ensure_project_database(root: &Path) -> Result<storage::ProjectPaths> {
+    let paths = storage::ProjectPaths::from_root(root);
+    if !paths.db_path.exists() {
+        anyhow::bail!(
+            "content project database not found: {}",
+            paths.db_path.display()
+        );
+    }
+    Ok(paths)
+}
+
+fn print_project_status(root: &Path) {
+    let paths = storage::ProjectPaths::from_root(root);
+    if paths.db_path.exists() {
+        println!("content_project: found");
+    } else {
+        println!("content_project: missing");
+    }
+    println!(
+        "gitignore .auth/: {}",
+        if gitignore_covers(root, ".auth/") {
+            "covered"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "gitignore .content-score/douyin-debug/: {}",
+        if gitignore_covers(root, ".content-score/douyin-debug/") {
+            "covered"
+        } else {
+            "missing"
+        }
+    );
+}
+
+fn gitignore_covers(root: &Path, target: &str) -> bool {
+    let Ok(content) = std::fs::read_to_string(root.join(".gitignore")) else {
+        return false;
+    };
+    content.lines().any(|line| {
+        let line = line.trim();
+        line == target || line == format!("/{target}")
+    })
 }
 
 pub fn resolve_aweme_id(input: &str) -> Result<String> {

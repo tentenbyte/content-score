@@ -377,6 +377,9 @@ fn record_retro(
     conn: &rusqlite::Connection,
     mut input: storage::RetroInput,
 ) -> Result<bool> {
+    if storage::retro_exists(conn, &input.prediction_id)? {
+        anyhow::bail!("prediction already has a retro: {}", input.prediction_id);
+    }
     let expected_hash = storage::prediction_hash(conn, &input.prediction_id)?;
     let prediction_path = root
         .join("predictions")

@@ -323,6 +323,63 @@ fn retro_import_rejects_duplicate_prediction_by_default() {
 }
 
 #[test]
+fn retro_command_rejects_duplicate_prediction_by_default() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let prediction_id = create_prediction(temp.path(), "manual-duplicate.md", "普通经验分享。");
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "retro",
+            &prediction_id,
+            "--plays",
+            "1200",
+            "--likes",
+            "80",
+            "--comments",
+            "12",
+            "--shares",
+            "4",
+            "--saves",
+            "9",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("retro recorded"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "retro",
+            &prediction_id,
+            "--plays",
+            "1800",
+            "--likes",
+            "90",
+            "--comments",
+            "15",
+            "--shares",
+            "5",
+            "--saves",
+            "10",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already has a retro"));
+
+    assert_retro_plays(temp.path(), &prediction_id, 1, 1200, 1200);
+}
+
+#[test]
 fn douyin_help_lists_subcommands() {
     Command::cargo_bin("content-score")
         .unwrap()
@@ -410,6 +467,58 @@ fn douyin_fetch_no_import_writes_json_without_completed_sample() {
         .stdout(predicate::str::contains("imported: no"));
 
     assert!(output_path.exists());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("calibrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("samples: 0"));
+}
+
+#[test]
+fn douyin_fetch_no_import_rejects_adapter_output_with_negative_metric() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id =
+        create_prediction(temp.path(), "douyin-no-import-invalid.md", "普通经验分享。");
+    let adapter = write_fake_douyin_adapter_with_rows(
+        temp.path(),
+        format!(
+            r#"[{{
+        "prediction_id": {},
+        "plays": -1,
+        "likes": 80,
+        "comments": 12,
+        "shares": 4,
+        "saves": 9,
+        "top_comments": ["评论1"],
+        "notes": "invalid metric"
+    }}]"#,
+            serde_json::to_string(&prediction_id).unwrap()
+        ),
+    );
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args([
+            "douyin",
+            "fetch",
+            &prediction_id,
+            "7333333333333333333",
+            "--no-import",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plays must be non-negative"));
 
     Command::cargo_bin("content-score")
         .unwrap()
@@ -537,6 +646,57 @@ fn douyin_fetch_rejects_adapter_output_with_multiple_rows() {
 }
 
 #[test]
+fn douyin_fetch_dry_run_rejects_adapter_output_missing_required_metric() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id =
+        create_prediction(temp.path(), "douyin-dry-run-invalid.md", "普通经验分享。");
+    let adapter = write_fake_douyin_adapter_with_rows(
+        temp.path(),
+        format!(
+            r#"[{{
+        "prediction_id": {},
+        "likes": 80,
+        "comments": 12,
+        "shares": 4,
+        "saves": 9,
+        "top_comments": ["评论1"],
+        "notes": "missing plays"
+    }}]"#,
+            serde_json::to_string(&prediction_id).unwrap()
+        ),
+    );
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args([
+            "douyin",
+            "fetch",
+            &prediction_id,
+            "7333333333333333333",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("plays"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("calibrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("samples: 0"));
+}
+
+#[test]
 fn douyin_fetch_dry_run_invokes_adapter_writes_json_without_import() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
@@ -587,6 +747,42 @@ fn douyin_fetch_dry_run_invokes_adapter_writes_json_without_import() {
         .assert()
         .success()
         .stdout(predicate::str::contains("samples: 0"));
+}
+
+#[test]
+fn douyin_fetch_sets_project_root_for_adapter() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id = create_prediction(temp.path(), "douyin-project-root.md", "普通经验分享。");
+    let adapter = write_project_root_capture_adapter(temp.path(), 1500);
+    let wrong_root = temp.path().join("wrong-project");
+    let capture_path = temp.path().join("project-root-capture.txt");
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .env("CONTENT_SCORE_PROJECT_ROOT", &wrong_root)
+        .args([
+            "douyin",
+            "fetch",
+            &prediction_id,
+            "7333333333333333333",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry-run: yes"));
+
+    assert_eq!(
+        fs::read_to_string(capture_path).unwrap(),
+        temp.path().canonicalize().unwrap().display().to_string()
+    );
 }
 
 #[test]
@@ -802,14 +998,36 @@ fn douyin_doctor_delegates_to_adapter_and_streams_output() {
         .args(["douyin", "doctor"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("content_project: missing"))
         .stdout(predicate::str::contains("doctor: ok"));
 
     assert_eq!(fs::read_to_string(marker_path).unwrap(), "doctor");
 }
 
 #[test]
+fn douyin_doctor_uses_content_score_repo_adapter_path() {
+    let temp = tempdir().unwrap();
+    let repo = write_fake_content_score_repo(temp.path());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_REPO", repo)
+        .args(["douyin", "doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("doctor: repo adapter ok"));
+}
+
+#[test]
 fn douyin_login_delegates_to_adapter_and_streams_output() {
     let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
     let adapter = write_fake_douyin_adapter(temp.path(), 1600);
     let marker_path = fake_douyin_adapter_marker(temp.path());
 
@@ -823,6 +1041,26 @@ fn douyin_login_delegates_to_adapter_and_streams_output() {
         .stdout(predicate::str::contains("login: ok"));
 
     assert_eq!(fs::read_to_string(marker_path).unwrap(), "login");
+}
+
+#[test]
+fn douyin_login_requires_content_project() {
+    let temp = tempdir().unwrap();
+    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let marker_path = fake_douyin_adapter_marker(temp.path());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args(["douyin", "login"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "content project database not found",
+        ));
+
+    assert!(!marker_path.exists());
 }
 
 #[test]
@@ -1076,6 +1314,70 @@ print(f"aweme_id: {{args.input}}")
 
 fn fake_douyin_adapter_marker(root: &std::path::Path) -> PathBuf {
     root.join("fake_douyin_adapter.invoked")
+}
+
+fn write_project_root_capture_adapter(root: &std::path::Path, plays: i64) -> PathBuf {
+    let adapter = root.join("project_root_capture_adapter.py");
+    let capture =
+        serde_json::to_string(&root.join("project-root-capture.txt").display().to_string())
+            .unwrap();
+    fs::write(
+        &adapter,
+        format!(
+            r#"#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+subparsers = parser.add_subparsers(dest="command", required=True)
+fetch = subparsers.add_parser("fetch")
+fetch.add_argument("input")
+fetch.add_argument("--prediction-id", required=True)
+fetch.add_argument("--output", required=True)
+args = parser.parse_args()
+
+project_root = Path(os.environ["CONTENT_SCORE_PROJECT_ROOT"]).resolve()
+Path({capture}).write_text(str(project_root), encoding="utf-8")
+with open(args.output, "w", encoding="utf-8") as handle:
+    json.dump([{{
+        "prediction_id": args.prediction_id,
+        "plays": {plays},
+        "likes": 80,
+        "comments": 12,
+        "shares": 4,
+        "saves": 9,
+        "top_comments": ["评论1"],
+        "notes": "fake douyin"
+    }}], handle, ensure_ascii=False)
+print(f"aweme_id: {{args.input}}")
+"#
+        ),
+    )
+    .unwrap();
+    adapter
+}
+
+fn write_fake_content_score_repo(root: &std::path::Path) -> PathBuf {
+    let repo = root.join("fake-content-score-repo");
+    let adapter_dir = repo.join("adapters/douyin-session");
+    fs::create_dir_all(&adapter_dir).unwrap();
+    fs::write(
+        adapter_dir.join("cli.py"),
+        r#"#!/usr/bin/env python3
+import argparse
+
+parser = argparse.ArgumentParser()
+subparsers = parser.add_subparsers(dest="command", required=True)
+subparsers.add_parser("doctor")
+args = parser.parse_args()
+if args.command == "doctor":
+    print("doctor: repo adapter ok")
+"#,
+    )
+    .unwrap();
+    repo
 }
 
 fn assert_retro_plays(
