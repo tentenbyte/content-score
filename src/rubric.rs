@@ -1,0 +1,59 @@
+use crate::dimensions::Dimension;
+use crate::score::ScoreSet;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rubric {
+    pub version: String,
+    pub weights: BTreeMap<Dimension, f64>,
+}
+
+impl Rubric {
+    pub fn default_v0() -> Rubric {
+        let weights = Dimension::all()
+            .iter()
+            .copied()
+            .map(|dimension| (dimension, 1.0))
+            .collect();
+
+        Rubric {
+            version: "v0".to_string(),
+            weights,
+        }
+    }
+
+    pub fn composite(&self, scores: &ScoreSet) -> f64 {
+        let weighted_sum = self
+            .weights
+            .iter()
+            .map(|(dimension, weight)| scores.get(*dimension) as f64 * weight)
+            .sum::<f64>();
+        let total_weight = self.weights.values().sum::<f64>();
+
+        weighted_sum / total_weight * 2.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::score::ScoreSet;
+
+    #[test]
+    fn default_v0_computes_composite_on_zero_to_ten_scale() {
+        let scores = ScoreSet::from_pairs(vec![
+            ("ER", 4),
+            ("HP", 5),
+            ("QL", 3),
+            ("NA", 3),
+            ("AB", 4),
+            ("SR", 2),
+            ("SAT", 1),
+        ])
+        .unwrap();
+        let rubric = Rubric::default_v0();
+
+        assert!((rubric.composite(&scores) - 6.285714).abs() < 0.0001);
+    }
+}

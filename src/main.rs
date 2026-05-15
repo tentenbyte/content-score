@@ -1,3 +1,7 @@
+mod dimensions;
+mod rubric;
+mod score;
+
 #[cfg(test)]
 mod tests {
     #[test]
