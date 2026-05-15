@@ -1,4 +1,5 @@
 mod dimensions;
+mod prediction;
 mod rubric;
 mod score;
 mod storage;
@@ -22,6 +23,32 @@ enum Commands {
         script: PathBuf,
         #[arg(long)]
         scores: String,
+    },
+    Predict {
+        script: PathBuf,
+        #[arg(long)]
+        scores: String,
+        #[arg(long)]
+        bet: String,
+        #[arg(long)]
+        bucket: Option<String>,
+    },
+    Retro {
+        id: String,
+        #[arg(long)]
+        plays: i64,
+        #[arg(long)]
+        likes: i64,
+        #[arg(long)]
+        comments: i64,
+        #[arg(long)]
+        shares: i64,
+        #[arg(long)]
+        saves: i64,
+        #[arg(long)]
+        top_comments: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
     },
     Candidates {
         #[command(subcommand)]
@@ -74,6 +101,78 @@ fn main() -> Result<()> {
                 composite,
             )?;
             print_score_table(&scores, composite);
+        }
+        Commands::Predict {
+            script,
+            scores,
+            bet,
+            bucket,
+        } => {
+            std::fs::read_to_string(&script)?;
+            let scores = score::parse_score_pairs(&scores)?;
+            let root = std::env::current_dir()?;
+            let (_paths, conn) = storage::open_project(&root)?;
+            let rubric = storage::active_rubric(&conn)?;
+            let composite = rubric.composite(&scores);
+            let draft = prediction::build_prediction(
+                &root,
+                &script,
+                &rubric,
+                &scores,
+                composite,
+                &bet,
+                bucket.as_deref(),
+            )?;
+            prediction::write_prediction(&draft)?;
+            storage::insert_prediction(
+                &conn,
+                &draft.id,
+                &script.display().to_string(),
+                &draft.script_hash,
+                &rubric,
+                &scores,
+                composite,
+                &bet,
+                bucket.as_deref(),
+                &draft.prediction_hash,
+            )?;
+            println!("prediction {} written to {}", draft.id, draft.path.display());
+            println!("composite: {:.2} / 10", composite);
+        }
+        Commands::Retro {
+            id,
+            plays,
+            likes,
+            comments,
+            shares,
+            saves,
+            top_comments,
+            notes,
+        } => {
+            let root = std::env::current_dir()?;
+            let (_paths, conn) = storage::open_project(&root)?;
+            let expected_hash = storage::prediction_hash(&conn, &id)?;
+            let prediction_path = root.join("predictions").join(format!("{id}.md"));
+            let actual_hash = prediction::prediction_file_hash(&prediction_path)?;
+            let contaminated = expected_hash != actual_hash;
+            if contaminated {
+                eprintln!("integrity warning: prediction file changed since it was written");
+            }
+            storage::insert_retro(
+                &conn,
+                &storage::RetroInput {
+                    prediction_id: id.clone(),
+                    plays,
+                    likes,
+                    comments,
+                    shares,
+                    saves,
+                    top_comments,
+                    notes,
+                    contaminated,
+                },
+            )?;
+            println!("retro recorded for {id}");
         }
         Commands::Candidates { command } => {
             let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;

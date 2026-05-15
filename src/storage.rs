@@ -150,6 +150,84 @@ pub fn list_candidates(conn: &Connection) -> Result<Vec<CandidateSummary>> {
     Ok(candidates)
 }
 
+pub fn insert_prediction(
+    conn: &Connection,
+    id: &str,
+    script_path: &str,
+    script_hash: &str,
+    rubric: &Rubric,
+    scores: &ScoreSet,
+    composite: f64,
+    bet: &str,
+    bucket: Option<&str>,
+    prediction_hash: &str,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        INSERT INTO predictions
+            (id, script_path, script_hash, rubric_version, scores_json, composite, bet, bucket, prediction_hash, contaminated, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)
+        "#,
+        params![
+            id,
+            script_path,
+            script_hash,
+            rubric.version,
+            scores.to_json_string()?,
+            composite,
+            bet,
+            bucket,
+            prediction_hash,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn prediction_hash(conn: &Connection, id: &str) -> Result<String> {
+    Ok(conn.query_row(
+        "SELECT prediction_hash FROM predictions WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?)
+}
+
+#[derive(Debug, Clone)]
+pub struct RetroInput {
+    pub prediction_id: String,
+    pub plays: i64,
+    pub likes: i64,
+    pub comments: i64,
+    pub shares: i64,
+    pub saves: i64,
+    pub top_comments: Option<String>,
+    pub notes: Option<String>,
+    pub contaminated: bool,
+}
+
+pub fn insert_retro(conn: &Connection, input: &RetroInput) -> Result<i64> {
+    conn.execute(
+        r#"
+        INSERT INTO retros
+            (prediction_id, plays, likes, comments, shares, saves, top_comments, notes, contaminated, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "#,
+        params![
+            input.prediction_id,
+            input.plays,
+            input.likes,
+            input.comments,
+            input.shares,
+            input.saves,
+            input.top_comments,
+            input.notes,
+            if input.contaminated { 1 } else { 0 },
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
 fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
