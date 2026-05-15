@@ -84,6 +84,42 @@ content-score retro <prediction-id> \
 
 `predict` writes a Markdown file under `predictions/` and stores its hash. `retro` checks that hash before recording real performance. Edited prediction files are marked contaminated.
 
+## Batch Retro Import
+
+CSV:
+
+```bash
+content-score retro import douyin.csv
+```
+
+```csv
+prediction_id,plays,likes,comments,shares,saves,top_comments,notes
+2026-05-15_xxx,1200,80,12,4,9,"comment1|comment2","T+3"
+```
+
+JSON:
+
+```bash
+content-score retro import douyin.json
+```
+
+```json
+[
+  {
+    "prediction_id": "2026-05-15_xxx",
+    "plays": 1200,
+    "likes": 80,
+    "comments": 12,
+    "shares": 4,
+    "saves": 9,
+    "top_comments": ["comment1", "comment2"],
+    "notes": "T+3"
+  }
+]
+```
+
+Import continues after row-level failures and prints imported, failed, and contaminated counts.
+
 ## Calibrate And Upgrade
 
 ```bash

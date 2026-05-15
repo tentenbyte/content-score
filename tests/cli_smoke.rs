@@ -198,6 +198,96 @@ fn predict_and_retro_work() {
 }
 
 #[test]
+fn retro_import_csv_records_rows_and_continues_after_errors() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let first_id = create_prediction(temp.path(), "a.md", "强情绪开头，猫猫救场。");
+    let second_id = create_prediction(temp.path(), "b.md", "社会议题明确，但情绪较弱。");
+    let second_path = temp
+        .path()
+        .join("predictions")
+        .join(format!("{second_id}.md"));
+    fs::write(second_path, "edited prediction").unwrap();
+
+    fs::write(
+        temp.path().join("douyin.csv"),
+        format!(
+            "prediction_id,plays,likes,comments,shares,saves,top_comments,notes\n\
+             {first_id},1200,80,12,4,9,\"评论1|评论2\",T+3\n\
+             {second_id},900,60,8,3,5,\"评论A|评论B\",T+3 tampered\n\
+             missing_prediction,10,1,0,0,0,,bad row\n"
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["retro", "import", "douyin.csv"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("imported: 2"))
+        .stdout(predicate::str::contains("failed: 1"))
+        .stdout(predicate::str::contains("contaminated: 1"))
+        .stdout(predicate::str::contains("missing_prediction"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("calibrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("samples: 1"));
+}
+
+#[test]
+fn retro_import_json_records_rows() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let prediction_id = create_prediction(temp.path(), "json.md", "普通经验分享，开头一般。");
+    fs::write(
+        temp.path().join("douyin.json"),
+        format!(
+            r#"[
+  {{
+    "prediction_id": "{prediction_id}",
+    "plays": 1500,
+    "likes": 120,
+    "comments": 18,
+    "shares": 7,
+    "saves": 11,
+    "top_comments": ["评论1", "评论2"],
+    "notes": "T+3"
+  }}
+]"#
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["retro", "import", "douyin.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("imported: 1"))
+        .stdout(predicate::str::contains("failed: 0"))
+        .stdout(predicate::str::contains("contaminated: 0"));
+}
+
+#[test]
 fn calibrate_and_upgrade_work() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
@@ -311,4 +401,33 @@ fn prediction_files(root: &std::path::Path) -> HashSet<PathBuf> {
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .collect()
+}
+
+fn create_prediction(root: &std::path::Path, file_name: &str, body: &str) -> String {
+    fs::create_dir_all(root.join("scripts")).unwrap();
+    let script_path = format!("scripts/{file_name}");
+    fs::write(root.join(&script_path), body).unwrap();
+    let before = prediction_files(root);
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(root)
+        .args([
+            "predict",
+            &script_path,
+            "--scores",
+            "ER=4,HP=5,QL=3,NA=3,AB=4,SR=2,SAT=1",
+            "--bet",
+            "sample bet",
+        ])
+        .assert()
+        .success();
+
+    let after = prediction_files(root);
+    let prediction_path = after.difference(&before).next().unwrap().clone();
+    prediction_path
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string()
 }

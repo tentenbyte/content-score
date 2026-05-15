@@ -42,6 +42,7 @@ Main source files:
 - `src/score.rs`: score parsing, strict JSON score ingestion, optional OpenAI-compatible LLM path.
 - `src/storage.rs`: local `.content-score/content.sqlite` schema and persistence.
 - `src/prediction.rs`: prediction markdown rendering and hash integrity.
+- `src/retro_import.rs`: CSV/JSON batch retro import parsing and row-level reporting.
 - `src/calibration.rs`: completed-sample analysis and conservative weight proposal logic.
 - `src/upgrade.rs`: rubric version increment logic.
 - `tests/cli_smoke.rs`: end-to-end CLI smoke tests.
@@ -122,6 +123,9 @@ composite = (ER + HP + QL + NA + AB + SR + SAT) / 7 * 2.0
 - `content-score retro <prediction-id> --plays ... --likes ... --comments ... --shares ... --saves ...`
 - Checks prediction markdown hash before recording retro.
 - Marks retro contaminated if the prediction file changed.
+- `content-score retro import <file.csv|file.json>`
+- Imports multiple retros in one run.
+- Continues after row-level failures and reports imported/failed/contaminated counts.
 
 ### Calibration And Upgrade
 
@@ -156,15 +160,15 @@ cargo test
 cargo clippy -- -D warnings
 ```
 
-At that point the test suite included 8 unit tests and 5 CLI smoke tests.
+At that point the test suite included 8 unit tests and 7 CLI smoke tests.
 
 ## Prepared Goals
 
-### Next Target: Batch Retro Import
+### Completed Target: Batch Retro Import
 
-We want to reduce manual retro entry before attempting full Douyin automation.
+Batch retro import now reduces manual retro entry before full Douyin automation.
 
-Proposed command:
+Commands:
 
 ```bash
 content-score retro import douyin.csv
@@ -195,7 +199,7 @@ JSON shape:
 ]
 ```
 
-Required behavior:
+Implemented behavior:
 
 - Import multiple retros in one run.
 - Reuse the same prediction hash integrity check as single `retro`.
@@ -203,8 +207,16 @@ Required behavior:
 - Print success/failure/contaminated counts.
 - Report row-level errors clearly.
 - Store `top_comments` in a stable textual format.
-- Add CLI smoke tests for CSV and JSON import.
-- Update README and the Codex skill workflow after implementation.
+- CLI smoke tests cover CSV and JSON import.
+
+### Next Target: Duplicate/Validation Safeguards
+
+Batch import makes it easier to accidentally import the same retro more than once. Next we should add safeguards:
+
+- Detect existing retro rows for a prediction before inserting another.
+- Offer explicit overwrite/append behavior rather than silent duplication.
+- Validate required metrics are non-negative everywhere.
+- Consider a unique key or import batch table if repeated imports become common.
 
 ### Later Target: Douyin Semi-Automatic Adapter
 
@@ -242,17 +254,17 @@ First version adjusts weights only. Later:
 - The project already has the essential closed loop.
 - Persistence is local and simple.
 - Prediction hash integrity exists from the beginning.
+- Batch retro import now lowers manual data-entry friction.
 - Upgrades are confirm-first, reducing accidental overfitting.
 - Skill integration exists but does not replace the CLI.
 - The architecture is small enough to reason about and test.
 
 ### What Is Still Weak
 
-- Retro data entry is manual and therefore high-friction.
+- Retro data entry is still manual at the data-source level, but can now be batched.
 - Calibration is statistically crude with small samples.
 - LLM scoring is only an API-compatible path; there is no robust provider configuration UX.
 - Prediction markdown locking is hash-based, not filesystem-enforced.
-- No batch import yet.
 - No Douyin Creator Center automation yet.
 - No robust duplicate-retro prevention beyond current schema behavior.
 - No `list` command despite the original design mentioning it.
@@ -265,16 +277,15 @@ The biggest practical gap is not scoring. It is data recovery:
 published Douyin performance -> clean retro records -> calibration pool
 ```
 
-Until this is easier, the system depends on disciplined manual entry. The next engineering investment should make retro ingestion cheap and reliable.
+Batch import makes ingestion cheaper, but the system still depends on the user or a future adapter producing clean CSV/JSON.
 
 ### Recommended Priority Order
 
-1. Add batch retro CSV/JSON import.
-2. Add duplicate/validation safeguards around retros.
-3. Update the Codex skill to use retro import.
-4. Add `list` / status commands for predictions and pending retros.
-5. Add stronger calibration math.
-6. Explore Douyin Playwright adapter.
+1. Add duplicate/validation safeguards around retros.
+2. Update the installed Codex skill whenever CLI retro-import behavior changes.
+3. Add `list` / status commands for predictions and pending retros.
+4. Add stronger calibration math.
+5. Explore Douyin Playwright adapter.
 
 ## Development Rules For Future Agents
 
@@ -296,5 +307,4 @@ cargo clippy -- -D warnings
 
 ## Current Status
 
-The project is ready for the next implementation task: **batch retro import from CSV/JSON**.
-
+The project is ready for the next implementation task: **duplicate/validation safeguards around retros**.

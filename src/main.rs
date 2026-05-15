@@ -1,6 +1,7 @@
 mod calibration;
 mod dimensions;
 mod prediction;
+mod retro_import;
 mod rubric;
 mod score;
 mod storage;
@@ -45,16 +46,17 @@ enum Commands {
     },
     Retro {
         id: String,
+        import_file: Option<PathBuf>,
         #[arg(long)]
-        plays: i64,
+        plays: Option<i64>,
         #[arg(long)]
-        likes: i64,
+        likes: Option<i64>,
         #[arg(long)]
-        comments: i64,
+        comments: Option<i64>,
         #[arg(long)]
-        shares: i64,
+        shares: Option<i64>,
         #[arg(long)]
-        saves: i64,
+        saves: Option<i64>,
         #[arg(long)]
         top_comments: Option<String>,
         #[arg(long)]
@@ -176,6 +178,7 @@ fn main() -> Result<()> {
         }
         Commands::Retro {
             id,
+            import_file,
             plays,
             likes,
             comments,
@@ -186,28 +189,49 @@ fn main() -> Result<()> {
         } => {
             let root = std::env::current_dir()?;
             let (_paths, conn) = storage::open_project(&root)?;
-            let expected_hash = storage::prediction_hash(&conn, &id)?;
-            let prediction_path = root.join("predictions").join(format!("{id}.md"));
-            let actual_hash = prediction::prediction_file_hash(&prediction_path)?;
-            let contaminated = expected_hash != actual_hash;
-            if contaminated {
-                eprintln!("integrity warning: prediction file changed since it was written");
+            if id == "import" {
+                let Some(path) = import_file else {
+                    anyhow::bail!("retro import requires a CSV or JSON path");
+                };
+                let summary = retro_import::import_file(&root, &conn, &path)?;
+                for failure in &summary.failures {
+                    println!(
+                        "failed row {} {}: {}",
+                        failure.row_number, failure.prediction_id, failure.error
+                    );
+                }
+                println!("imported: {}", summary.imported);
+                println!("failed: {}", summary.failed);
+                println!("contaminated: {}", summary.contaminated);
+            } else {
+                if import_file.is_some() {
+                    anyhow::bail!("unexpected extra argument after prediction id");
+                }
+                let plays = require_metric("plays", plays)?;
+                let likes = require_metric("likes", likes)?;
+                let comments = require_metric("comments", comments)?;
+                let shares = require_metric("shares", shares)?;
+                let saves = require_metric("saves", saves)?;
+                let contaminated = record_retro(
+                    &root,
+                    &conn,
+                    storage::RetroInput {
+                        prediction_id: id.clone(),
+                        plays,
+                        likes,
+                        comments,
+                        shares,
+                        saves,
+                        top_comments,
+                        notes,
+                        contaminated: false,
+                    },
+                )?;
+                if contaminated {
+                    eprintln!("integrity warning: prediction file changed since it was written");
+                }
+                println!("retro recorded for {id}");
             }
-            storage::insert_retro(
-                &conn,
-                &storage::RetroInput {
-                    prediction_id: id.clone(),
-                    plays,
-                    likes,
-                    comments,
-                    shares,
-                    saves,
-                    top_comments,
-                    notes,
-                    contaminated,
-                },
-            )?;
-            println!("retro recorded for {id}");
         }
         Commands::Calibrate => {
             let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;
@@ -334,4 +358,24 @@ fn resolve_scores(
         return score::load_score_json(&path);
     }
     score::score_with_llm(target_text)
+}
+
+fn require_metric(name: &str, value: Option<i64>) -> Result<i64> {
+    value.ok_or_else(|| anyhow::anyhow!("--{name} is required"))
+}
+
+fn record_retro(
+    root: &std::path::Path,
+    conn: &rusqlite::Connection,
+    mut input: storage::RetroInput,
+) -> Result<bool> {
+    let expected_hash = storage::prediction_hash(conn, &input.prediction_id)?;
+    let prediction_path = root
+        .join("predictions")
+        .join(format!("{}.md", input.prediction_id));
+    let actual_hash = prediction::prediction_file_hash(&prediction_path)?;
+    let contaminated = expected_hash != actual_hash;
+    input.contaminated = contaminated;
+    storage::insert_retro(conn, &input)?;
+    Ok(contaminated)
 }
