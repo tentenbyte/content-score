@@ -120,6 +120,14 @@ pub fn score_candidate(
     Ok(())
 }
 
+pub fn candidate_text(conn: &Connection, candidate_id: i64) -> Result<String> {
+    Ok(conn.query_row(
+        "SELECT text FROM candidates WHERE id = ?1",
+        params![candidate_id],
+        |row| row.get(0),
+    )?)
+}
+
 #[derive(Debug, Clone)]
 pub struct CandidateSummary {
     pub id: i64,
@@ -150,18 +158,19 @@ pub fn list_candidates(conn: &Connection) -> Result<Vec<CandidateSummary>> {
     Ok(candidates)
 }
 
-pub fn insert_prediction(
-    conn: &Connection,
-    id: &str,
-    script_path: &str,
-    script_hash: &str,
-    rubric: &Rubric,
-    scores: &ScoreSet,
-    composite: f64,
-    bet: &str,
-    bucket: Option<&str>,
-    prediction_hash: &str,
-) -> Result<()> {
+pub struct PredictionRecord<'a> {
+    pub id: &'a str,
+    pub script_path: &'a str,
+    pub script_hash: &'a str,
+    pub rubric: &'a Rubric,
+    pub scores: &'a ScoreSet,
+    pub composite: f64,
+    pub bet: &'a str,
+    pub bucket: Option<&'a str>,
+    pub prediction_hash: &'a str,
+}
+
+pub fn insert_prediction(conn: &Connection, record: &PredictionRecord<'_>) -> Result<()> {
     conn.execute(
         r#"
         INSERT INTO predictions
@@ -169,15 +178,15 @@ pub fn insert_prediction(
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10)
         "#,
         params![
-            id,
-            script_path,
-            script_hash,
-            rubric.version,
-            scores.to_json_string()?,
-            composite,
-            bet,
-            bucket,
-            prediction_hash,
+            record.id,
+            record.script_path,
+            record.script_hash,
+            record.rubric.version,
+            record.scores.to_json_string()?,
+            record.composite,
+            record.bet,
+            record.bucket,
+            record.prediction_hash,
             Utc::now().to_rfc3339(),
         ],
     )?;

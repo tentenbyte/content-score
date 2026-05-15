@@ -28,10 +28,17 @@ pub fn build_prediction(
     let script_bytes = fs::read(script_path)?;
     let script_hash = sha256_hex(&script_bytes);
     let id = prediction_id(script_path, &script_hash);
-    let path = project_root
-        .join("predictions")
-        .join(format!("{id}.md"));
-    let markdown = render_markdown(&id, script_path, &script_hash, rubric, scores, composite, bet, bucket);
+    let path = project_root.join("predictions").join(format!("{id}.md"));
+    let markdown = render_markdown(&RenderContext {
+        id: &id,
+        script_path,
+        script_hash: &script_hash,
+        rubric,
+        scores,
+        composite,
+        bet,
+        bucket,
+    });
     let prediction_hash = sha256_hex(markdown.as_bytes());
 
     Ok(PredictionDraft {
@@ -73,28 +80,31 @@ fn prediction_id(script_path: &Path, script_hash: &str) -> String {
     format!("{date}_{}_{}", &script_hash[..12], stem)
 }
 
-fn render_markdown(
-    id: &str,
-    script_path: &Path,
-    script_hash: &str,
-    rubric: &Rubric,
-    scores: &ScoreSet,
+struct RenderContext<'a> {
+    id: &'a str,
+    script_path: &'a Path,
+    script_hash: &'a str,
+    rubric: &'a Rubric,
+    scores: &'a ScoreSet,
     composite: f64,
-    bet: &str,
-    bucket: Option<&str>,
-) -> String {
+    bet: &'a str,
+    bucket: Option<&'a str>,
+}
+
+fn render_markdown(ctx: &RenderContext<'_>) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("# {id} prediction"));
+    lines.push(format!("# {} prediction", ctx.id));
     lines.push(String::new());
-    lines.push(format!("script_path: {}", script_path.display()));
-    lines.push(format!("script_hash: {script_hash}"));
-    lines.push(format!("rubric_version: {}", rubric.version));
-    lines.push(format!("composite: {:.2}", composite));
-    lines.push(format!("bucket: {}", bucket.unwrap_or("not-set")));
+    lines.push(format!("script_path: {}", ctx.script_path.display()));
+    lines.push(format!("script_hash: {}", ctx.script_hash));
+    lines.push(format!("rubric_version: {}", ctx.rubric.version));
+    lines.push(format!("composite: {:.2}", ctx.composite));
+    lines.push(format!("bucket: {}", ctx.bucket.unwrap_or("not-set")));
     lines.push(String::new());
     lines.push("## scores".to_string());
     for dimension in Dimension::all() {
-        let entry = scores
+        let entry = ctx
+            .scores
             .scores
             .get(dimension)
             .expect("ScoreSet invariant violated: missing dimension");
@@ -108,7 +118,7 @@ fn render_markdown(
     }
     lines.push(String::new());
     lines.push("## bet".to_string());
-    lines.push(bet.to_string());
+    lines.push(ctx.bet.to_string());
     lines.push(String::new());
     lines.push("## retro".to_string());
     lines.push("_pending_".to_string());

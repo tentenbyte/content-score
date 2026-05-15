@@ -1,7 +1,10 @@
 use crate::dimensions::Dimension;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DimensionScore {
@@ -110,6 +113,77 @@ pub fn parse_score_pairs(input: &str) -> Result<ScoreSet> {
     ScoreSet::new(scores)
 }
 
+pub fn load_score_json(path: &Path) -> Result<ScoreSet> {
+    let input = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read score JSON at {}", path.display()))?;
+    ScoreSet::from_json_str(&input)
+}
+
+pub fn score_with_llm(target_text: &str) -> Result<ScoreSet> {
+    let endpoint = std::env::var("CONTENT_SCORE_LLM_ENDPOINT")
+        .context("CONTENT_SCORE_LLM_ENDPOINT is required for --llm")?;
+    let api_key = std::env::var("CONTENT_SCORE_LLM_API_KEY")
+        .context("CONTENT_SCORE_LLM_API_KEY is required for --llm")?;
+    let model = std::env::var("CONTENT_SCORE_LLM_MODEL")
+        .context("CONTENT_SCORE_LLM_MODEL is required for --llm")?;
+    let url = chat_completions_url(&endpoint);
+
+    let body = json!({
+        "model": model,
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Score Chinese content using exactly these dimensions: ER emotional resonance, HP hook potential, QL quotable lines, NA narrativity, AB audience breadth, SR social resonance, SAT satire depth. Return strict JSON only. Shape: {\"ER\":{\"score\":0-5,\"reason\":\"...\"}, ...}. Scores must be integers."
+            },
+            {
+                "role": "user",
+                "content": target_text
+            }
+        ]
+    });
+
+    let response: ChatCompletionResponse = Client::new()
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let content = response
+        .choices
+        .first()
+        .map(|choice| choice.message.content.trim())
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| anyhow!("LLM response did not contain message content"))?;
+
+    ScoreSet::from_json_str(content)
+}
+
+fn chat_completions_url(endpoint: &str) -> String {
+    let trimmed = endpoint.trim_end_matches('/');
+    if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1/chat/completions")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    message: ChatMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatMessage {
+    content: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +220,24 @@ mod tests {
         let scores = parse_score_pairs("ER=4,HP=5,QL=3,NA=3,AB=4,SR=2,SAT=1").unwrap();
         assert_eq!(scores.get(crate::dimensions::Dimension::Hp), 5);
         assert!(parse_score_pairs("ER=4").is_err());
+    }
+
+    #[test]
+    fn parses_strict_score_json_and_rejects_missing_dimension() {
+        let json = r#"{
+          "ER": {"score": 4, "reason": "specific emotional recognition"},
+          "HP": {"score": 5, "reason": "strong opening contrast"},
+          "QL": {"score": 3, "reason": "one reusable line"},
+          "NA": {"score": 3, "reason": "clear but simple arc"},
+          "AB": {"score": 4, "reason": "broad creator audience"},
+          "SR": {"score": 2, "reason": "weak social conflict"},
+          "SAT": {"score": 1, "reason": "little irony"}
+        }"#;
+
+        let scores = ScoreSet::from_json_str(json).unwrap();
+        assert_eq!(scores.get(crate::dimensions::Dimension::Er), 4);
+
+        let missing = r#"{"ER": {"score": 4, "reason": "x"}}"#;
+        assert!(ScoreSet::from_json_str(missing).is_err());
     }
 }

@@ -90,6 +90,45 @@ fn score_and_candidates_work() {
 }
 
 #[test]
+fn score_accepts_strict_json_file() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    fs::create_dir_all(temp.path().join("scripts")).unwrap();
+    fs::write(
+        temp.path().join("scripts/foo.md"),
+        "第七页 PPT 上突然出现一只加油猫猫。",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("score.json"),
+        r#"{
+  "ER": {"score": 4, "reason": "specific emotional recognition"},
+  "HP": {"score": 5, "reason": "strong opening contrast"},
+  "QL": {"score": 3, "reason": "one reusable line"},
+  "NA": {"score": 3, "reason": "clear but simple arc"},
+  "AB": {"score": 4, "reason": "broad creator audience"},
+  "SR": {"score": 2, "reason": "weak social conflict"},
+  "SAT": {"score": 1, "reason": "little irony"}
+}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["score", "scripts/foo.md", "--score-json", "score.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("composite: 6.29 / 10"));
+}
+
+#[test]
 fn predict_and_retro_work() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")

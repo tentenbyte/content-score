@@ -24,12 +24,20 @@ enum Commands {
     Score {
         script: PathBuf,
         #[arg(long)]
-        scores: String,
+        scores: Option<String>,
+        #[arg(long)]
+        score_json: Option<PathBuf>,
+        #[arg(long)]
+        llm: bool,
     },
     Predict {
         script: PathBuf,
         #[arg(long)]
-        scores: String,
+        scores: Option<String>,
+        #[arg(long)]
+        score_json: Option<PathBuf>,
+        #[arg(long)]
+        llm: bool,
         #[arg(long)]
         bet: String,
         #[arg(long)]
@@ -73,7 +81,11 @@ enum CandidateCommand {
     Score {
         id: i64,
         #[arg(long)]
-        scores: String,
+        scores: Option<String>,
+        #[arg(long)]
+        score_json: Option<PathBuf>,
+        #[arg(long)]
+        llm: bool,
     },
     Top,
 }
@@ -95,9 +107,14 @@ fn main() -> Result<()> {
             println!("content-score initialized at .content-score");
             println!("active rubric: v0");
         }
-        Commands::Score { script, scores } => {
-            std::fs::read_to_string(&script)?;
-            let scores = score::parse_score_pairs(&scores)?;
+        Commands::Score {
+            script,
+            scores,
+            score_json,
+            llm,
+        } => {
+            let target_text = std::fs::read_to_string(&script)?;
+            let scores = resolve_scores(&target_text, scores, score_json, llm)?;
             let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;
             let rubric = storage::active_rubric(&conn)?;
             let composite = rubric.composite(&scores);
@@ -114,11 +131,13 @@ fn main() -> Result<()> {
         Commands::Predict {
             script,
             scores,
+            score_json,
+            llm,
             bet,
             bucket,
         } => {
-            std::fs::read_to_string(&script)?;
-            let scores = score::parse_score_pairs(&scores)?;
+            let target_text = std::fs::read_to_string(&script)?;
+            let scores = resolve_scores(&target_text, scores, score_json, llm)?;
             let root = std::env::current_dir()?;
             let (_paths, conn) = storage::open_project(&root)?;
             let rubric = storage::active_rubric(&conn)?;
@@ -133,19 +152,26 @@ fn main() -> Result<()> {
                 bucket.as_deref(),
             )?;
             prediction::write_prediction(&draft)?;
+            let script_ref = script.display().to_string();
             storage::insert_prediction(
                 &conn,
-                &draft.id,
-                &script.display().to_string(),
-                &draft.script_hash,
-                &rubric,
-                &scores,
-                composite,
-                &bet,
-                bucket.as_deref(),
-                &draft.prediction_hash,
+                &storage::PredictionRecord {
+                    id: &draft.id,
+                    script_path: &script_ref,
+                    script_hash: &draft.script_hash,
+                    rubric: &rubric,
+                    scores: &scores,
+                    composite,
+                    bet: &bet,
+                    bucket: bucket.as_deref(),
+                    prediction_hash: &draft.prediction_hash,
+                },
             )?;
-            println!("prediction {} written to {}", draft.id, draft.path.display());
+            println!(
+                "prediction {} written to {}",
+                draft.id,
+                draft.path.display()
+            );
             println!("composite: {:.2} / 10", composite);
         }
         Commands::Retro {
@@ -206,7 +232,10 @@ fn main() -> Result<()> {
                         &weights,
                         &rationale,
                     )?;
-                    println!("upgrade proposal #{id}: {} -> {}", rubric.version, to_version);
+                    println!(
+                        "upgrade proposal #{id}: {} -> {}",
+                        rubric.version, to_version
+                    );
                     println!("{rationale}");
                 }
                 (false, Some(id)) => {
@@ -224,8 +253,18 @@ fn main() -> Result<()> {
                     let id = storage::add_candidate(&conn, &text)?;
                     println!("candidate #{id}: {text}");
                 }
-                CandidateCommand::Score { id, scores } => {
-                    let scores = score::parse_score_pairs(&scores)?;
+                CandidateCommand::Score {
+                    id,
+                    scores,
+                    score_json,
+                    llm,
+                } => {
+                    let target_text = if llm {
+                        storage::candidate_text(&conn, id)?
+                    } else {
+                        String::new()
+                    };
+                    let scores = resolve_scores(&target_text, scores, score_json, llm)?;
                     let composite = rubric.composite(&scores);
                     storage::score_candidate(&conn, id, &scores, composite)?;
                     storage::insert_score_run(
@@ -246,7 +285,10 @@ fn main() -> Result<()> {
                                 candidate.id, score, candidate.text
                             ),
                             None => {
-                                println!("#{} candidate_score: unscored  {}", candidate.id, candidate.text)
+                                println!(
+                                    "#{} candidate_score: unscored  {}",
+                                    candidate.id, candidate.text
+                                )
                             }
                         }
                     }
@@ -272,4 +314,24 @@ fn print_score_table(scores: &score::ScoreSet, composite: f64) {
         );
     }
     println!("composite: {:.2} / 10", composite);
+}
+
+fn resolve_scores(
+    target_text: &str,
+    scores: Option<String>,
+    score_json: Option<PathBuf>,
+    llm: bool,
+) -> Result<score::ScoreSet> {
+    let selected = scores.is_some() as u8 + score_json.is_some() as u8 + llm as u8;
+    if selected != 1 {
+        anyhow::bail!("choose exactly one scoring input: --scores, --score-json, or --llm");
+    }
+
+    if let Some(scores) = scores {
+        return score::parse_score_pairs(&scores);
+    }
+    if let Some(path) = score_json {
+        return score::load_score_json(&path);
+    }
+    score::score_with_llm(target_text)
 }
