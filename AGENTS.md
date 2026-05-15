@@ -30,9 +30,11 @@ This project is not a Codex/Claude skill by itself. The CLI is the durable local
    - The skill must not replace the CLI with chat-only analysis.
    - The repository copy lives at `skills/content-score`; keep it in sync with the installed local skill.
 
-4. **Future Douyin import/crawling work**
-   - `cheat-on-content/adapters/perf-data/douyin-session` is the reference for possible Playwright/session-based Douyin Creator Center data capture.
-   - First priority is not full browser automation. First priority is batch retro import from CSV/JSON because it is simpler, testable, and immediately useful.
+4. **Douyin semi-automatic adapter**
+   - `src/douyin.rs` owns the Rust CLI command surface and delegates live browser work to a Python adapter.
+   - `adapters/douyin-session/cli.py` provides `doctor`, `login`, and `fetch` using Playwright.
+   - `adapters/douyin-session/normalize.py` normalizes fetched Douyin responses into the same JSON shape used by `retro import`.
+   - Live fetches require user-authorized Douyin login state and may need maintenance when Douyin changes Creator Center or public-page behavior.
    - `TrendRadar` is a reference direction for trend-source integration, not a current dependency.
 
 ## Current Architecture
@@ -46,8 +48,12 @@ Main source files:
 - `src/storage.rs`: local `.content-score/content.sqlite` schema and persistence.
 - `src/prediction.rs`: prediction markdown rendering and hash integrity.
 - `src/retro_import.rs`: CSV/JSON batch retro import parsing and row-level reporting.
+- `src/douyin.rs`: `content-score douyin doctor/login/fetch`, adapter invocation, input validation, JSON backup, auto-import, and duplicate/replace safeguards.
 - `src/calibration.rs`: completed-sample analysis and conservative weight proposal logic.
 - `src/upgrade.rs`: rubric version increment logic.
+- `adapters/douyin-session/cli.py`: Playwright-based Douyin adapter entrypoint.
+- `adapters/douyin-session/normalize.py`: adapter response normalization and import-row construction.
+- `adapters/douyin-session/tests/test_normalize.py`: Python normalization tests.
 - `tests/cli_smoke.rs`: end-to-end CLI smoke tests.
 - `skills/content-score/SKILL.md`: distributable Codex skill for invoking the CLI.
 - `skills/content-score/agents/openai.yaml`: UI metadata for the packaged skill.
@@ -59,6 +65,9 @@ Local user project state:
 .content-score/
   content.sqlite
   rubric.toml
+  imports/
+  douyin-debug/
+.auth/
 predictions/
 ```
 
@@ -133,6 +142,12 @@ composite = (ER + HP + QL + NA + AB + SR + SAT) / 7 * 2.0
 - Imports multiple retros in one run.
 - Continues after row-level failures and reports imported/failed/contaminated counts.
 
+### Duplicate Retro Safeguards
+
+- `retro import` rejects duplicate completed samples for a prediction by default.
+- Import callers can opt into replace behavior where supported.
+- Douyin fetch rejects a second import for the same prediction unless `--replace` is supplied.
+
 ### Calibration And Upgrade
 
 - `content-score calibrate`
@@ -157,6 +172,18 @@ composite = (ER + HP + QL + NA + AB + SR + SAT) / 7 * 2.0
   - CLI fallback
   - common mistakes
 
+### Douyin Semi-Automatic Adapter
+
+- `content-score douyin doctor`
+- `content-score douyin login`
+- `content-score douyin fetch <prediction-id> <url-or-id>`
+- Fetch supports raw aweme ids, long Douyin video URLs, and `v.douyin.com` short links.
+- Fetch writes `.content-score/imports/douyin-<prediction-id>.json`.
+- Fetch imports by default through the same retro import path.
+- `--no-import` and `--dry-run` keep the JSON backup without recording a retro.
+- `--replace` replaces an existing retro for the prediction.
+- Auth/session data stays in the user's project `.auth/`; debug files stay under `.content-score/douyin-debug/`.
+
 ### Verification
 
 Most recent full verification passed:
@@ -165,15 +192,21 @@ Most recent full verification passed:
 cargo fmt -- --check
 cargo test
 cargo clippy -- -D warnings
+python3 -m unittest discover adapters/douyin-session/tests -v
 ```
 
-At that point the test suite included 8 unit tests and 7 CLI smoke tests.
+Current automated suite shape:
+
+- 12 Rust unit tests.
+- 22 Rust CLI smoke tests.
+- 9 Python adapter normalization tests under `adapters/douyin-session/tests`.
+- Live Douyin login/fetch has not been verified in this environment because Playwright/Chromium/login state is not installed here.
 
 ## Prepared Goals
 
 ### Completed Target: Batch Retro Import
 
-Batch retro import now reduces manual retro entry before full Douyin automation.
+Batch retro import reduces manual retro entry and remains the stable ingestion path used by the Douyin adapter.
 
 Commands:
 
@@ -216,24 +249,27 @@ Implemented behavior:
 - Store `top_comments` in a stable textual format.
 - CLI smoke tests cover CSV and JSON import.
 
-### Next Target: Duplicate/Validation Safeguards
+### Completed Target: Duplicate/Validation Safeguards
 
-Batch import makes it easier to accidentally import the same retro more than once. Next we should add safeguards:
+- Existing retro rows are detected before duplicate insertion.
+- Default import behavior rejects duplicates.
+- Replace behavior is explicit where implemented.
+- Douyin fetch refuses duplicate default imports before live adapter execution.
 
-- Detect existing retro rows for a prediction before inserting another.
-- Offer explicit overwrite/append behavior rather than silent duplication.
-- Validate required metrics are non-negative everywhere.
-- Consider a unique key or import batch table if repeated imports become common.
+### Completed Target: Douyin Semi-Automatic Adapter
 
-### Later Target: Douyin Semi-Automatic Adapter
+- Rust CLI delegates `doctor`, `login`, and `fetch` to the Python adapter.
+- Auth/session data is local to the user's content project.
+- Fetch converts one Douyin record into the standard retro import JSON path.
+- Auto-import is default, with `--no-import`, `--dry-run`, and `--replace` controls.
+- Unit and smoke tests cover command routing, URL/id validation, backup JSON, auto-import, and duplicate behavior.
+- Live Douyin login/fetch remains manual verification because it depends on Playwright, Chromium, current Douyin behavior, and an authorized user session.
 
-Only after CSV/JSON import works:
+### Next Target: Better Operational UX
 
-- Add a Playwright-based local helper or adapter.
-- Store auth/session data under the user's content project, not in the CLI repo.
-- Prefer Douyin Creator Center over public pages for reliable metrics.
-- Capture plays, likes, comments, shares, saves, and top comments.
-- Convert fetched records into the same retro import path instead of bypassing CLI validation.
+- Add `list` / status commands for predictions, completed retros, and pending retros.
+- Improve operator guidance when Douyin adapter prerequisites or login state are missing.
+- Keep the installed Codex skill synchronized when CLI behavior changes.
 
 ### Later Target: Better Calibration
 
@@ -269,11 +305,10 @@ First version adjusts weights only. Later:
 ### What Is Still Weak
 
 - Retro data entry is still manual at the data-source level, but can now be batched.
+- Douyin semi-automatic fetch exists, but live browser behavior is not continuously verified.
 - Calibration is statistically crude with small samples.
 - LLM scoring is only an API-compatible path; there is no robust provider configuration UX.
 - Prediction markdown locking is hash-based, not filesystem-enforced.
-- No Douyin Creator Center automation yet.
-- No robust duplicate-retro prevention beyond current schema behavior.
 - No `list` command despite the original design mentioning it.
 
 ### Biggest Current Gap
@@ -284,15 +319,15 @@ The biggest practical gap is not scoring. It is data recovery:
 published Douyin performance -> clean retro records -> calibration pool
 ```
 
-Batch import makes ingestion cheaper, but the system still depends on the user or a future adapter producing clean CSV/JSON.
+Batch import and Douyin fetch make ingestion cheaper, but the system still depends on clean source data and user-authorized Douyin browser sessions.
 
 ### Recommended Priority Order
 
-1. Add duplicate/validation safeguards around retros.
-2. Update the installed Codex skill whenever CLI retro-import behavior changes.
-3. Add `list` / status commands for predictions and pending retros.
+1. Add `list` / status commands for predictions and pending retros.
+2. Improve Douyin adapter prerequisite/login diagnostics.
+3. Update the installed Codex skill whenever CLI retro-import or Douyin behavior changes.
 4. Add stronger calibration math.
-5. Explore Douyin Playwright adapter.
+5. Consider trend-source integrations such as TrendRadar.
 
 ## Development Rules For Future Agents
 
@@ -314,4 +349,4 @@ cargo clippy -- -D warnings
 
 ## Current Status
 
-The project is ready for the next implementation task: **duplicate/validation safeguards around retros**.
+The project is ready for the next implementation task: **better operational UX for prediction status and Douyin adapter diagnostics**.

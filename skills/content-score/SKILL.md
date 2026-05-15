@@ -22,11 +22,12 @@ Run commands from the user's content project root so `.content-score/`, `predict
 
 ## Top-level modes and rules
 
-This skill has three top-level modes:
+This skill has four top-level modes:
 
 - **Candidate mode:** score rough ideas/titles before a full script exists.
 - **Script mode:** score a script or write a pre-publication prediction from a script file.
-- **Calibration mode:** record actual metrics, inspect patterns, propose/apply rubric changes.
+- **Retro mode:** record or import post-publication metrics, including user-authorized Douyin fetches for a known prediction id.
+- **Calibration mode:** inspect patterns, propose/apply rubric changes.
 
 Rules:
 
@@ -39,6 +40,7 @@ Rules:
 - Never invent retro metrics. If required values are missing, ask for them.
 - Never write a blind prediction after the user has shared post-publication metrics for that same piece.
 - For scoring and prediction, do not use actual plays, likes, comments, shares, saves, or prior result hints in the score JSON.
+- Use Douyin fetch only for user-authorized Douyin data and an explicit known `prediction_id`; do not infer or match predictions automatically.
 
 ## When to use
 
@@ -48,12 +50,13 @@ Rules:
 - The user brings back post-publication metrics and wants a retro.
 - The user asks what patterns are emerging from past posts.
 - The user asks whether the rubric/weights should change.
+- The user asks to fetch Douyin metrics for a specific known prediction id and URL/aweme id.
 
 ## When not to use
 
 - The user is only asking conceptually how content scoring works.
 - The user wants broad content coaching with no idea, script, metrics, or project state.
-- The user wants hotspot crawling, Douyin session scraping, TrendRadar integration, or platform automation.
+- The user wants hotspot crawling, TrendRadar integration, broad platform automation, or unsupported scraping.
 - The task is to modify the Rust CLI code itself.
 
 ## Decision tree
@@ -70,9 +73,12 @@ Think about two questions: what artifact exists, and whether post-publication me
 4. If the user provided real metrics:
    - Use retro mode. Do not write a blind prediction.
    - If they provide a CSV/JSON file, use batch retro import.
-5. If the user asks for patterns:
+5. If the user asks to fetch Douyin metrics:
+   - Require an explicit `prediction_id` and Douyin URL or aweme id.
+   - Use Douyin retro fetch mode. Do not create or infer a prediction.
+6. If the user asks for patterns:
    - Use calibration mode.
-6. If the user asks to change weights:
+7. If the user asks to change weights:
    - Run `upgrade --propose`; apply only after confirmation.
 
 ## Score JSON policy
@@ -165,6 +171,28 @@ JSON must be an array of objects with the same metrics. `top_comments` may be an
 
 After import, report imported, failed, and contaminated counts. If failed rows exist, mention the row-level errors and do not imply the whole import succeeded.
 
+### Douyin retro fetch mode
+
+Use only when the user provides a known `prediction_id` and a Douyin raw aweme id, long video URL, or short link.
+
+```bash
+content-score douyin doctor
+content-score douyin login
+content-score douyin fetch <prediction-id> <url-or-aweme-id>
+```
+
+Run `doctor` first when the environment is unknown. Run `login` only when the user needs to establish or refresh a user-authorized Douyin session.
+
+`fetch` writes `.content-score/imports/douyin-<prediction-id>.json` and imports it by default through the standard retro import path. Default duplicate behavior rejects a second retro for the same prediction.
+
+Useful options:
+
+- `--no-import`: write the JSON backup without recording a retro.
+- `--dry-run`: run and validate fetch output without recording a retro.
+- `--replace`: replace an existing retro for the same prediction.
+
+If Playwright, Chromium, login state, or Douyin page behavior blocks the fetch, report the exact failure and do not fabricate metrics.
+
 ### Calibration and upgrade mode
 
 ```bash
@@ -196,6 +224,7 @@ After running the CLI, report only high-signal results:
 - prediction id/path, when created
 - retro integrity warning, if any
 - import counts and failed rows, for batch retro import
+- Douyin JSON backup path and whether import occurred
 - next recommended command
 
 Do not present unpersisted chat-only scores as if they were logged in the system.
@@ -208,3 +237,4 @@ Do not present unpersisted chat-only scores as if they were logged in the system
 - Predicting after the user already supplied metrics.
 - Scoring with hidden knowledge from prior performance instead of only the current idea/script.
 - Forgetting to write score JSON before calling `--score-json`.
+- Guessing which prediction a Douyin URL belongs to instead of requiring the explicit `prediction_id`.

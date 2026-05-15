@@ -1,3 +1,8 @@
 /target/
 /.content-score/
 /predictions/
+/.auth/
+/.venv/
+/.content-score/douyin-debug/
+__pycache__/
+*.pyc

@@ -153,6 +153,38 @@ content-score retro import douyin.json
 
 Import continues after row-level failures and prints imported, failed, and contaminated counts.
 
+## Douyin Semi-Automatic Retro Fetch
+
+The Douyin adapter can fetch metrics for a known prediction and import them as a retro:
+
+```bash
+content-score douyin doctor
+content-score douyin login
+content-score douyin fetch <prediction-id> <url-or-id>
+```
+
+`fetch` accepts a raw aweme id, a long Douyin video URL, or a `v.douyin.com` short link. By default it writes a JSON backup to `.content-score/imports/douyin-<prediction-id>.json` and imports that file through the normal retro import path.
+
+Fetch options:
+
+- `--no-import`: write the JSON backup but do not import it.
+- `--dry-run`: run the adapter and validate its JSON output without importing it.
+- `--replace`: replace an existing retro for the same prediction. Without this, duplicate retros are rejected.
+
+Set up the Python adapter dependencies in the content project where you will run the command. Point `CONTENT_SCORE_REPO` at this repository clone:
+
+```bash
+export CONTENT_SCORE_REPO=/path/to/content-score
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r "$CONTENT_SCORE_REPO/adapters/douyin-session/requirements.txt"
+python -m playwright install chromium
+```
+
+`content-score douyin login` stores the browser session under `.auth/`. Fetch failures may write captured diagnostic files under `.content-score/douyin-debug/`. Treat both paths as local-only data; do not commit them.
+
+Live Douyin behavior depends on Playwright, Chromium, a valid user-authorized Douyin login, and Douyin's current Creator Center/public-page behavior. It may need maintenance when Douyin changes its pages or network responses.
+
 ## Calibrate And Upgrade
 
 ```bash
