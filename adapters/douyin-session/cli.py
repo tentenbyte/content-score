@@ -16,8 +16,21 @@ from normalize import build_import_row, normalize_comments, normalize_video, par
 
 CREATOR_HOME = "https://creator.douyin.com/creator-micro/home"
 CREATOR_CONTENT = "https://creator.douyin.com/creator-micro/content/manage"
-AUTH_DIR = Path.cwd() / ".auth"
-DEBUG_DIR = Path.cwd() / ".content-score" / "douyin-debug"
+
+
+def project_root() -> Path:
+    configured = os.environ.get("CONTENT_SCORE_PROJECT_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path.cwd().resolve()
+
+
+def auth_dir() -> Path:
+    return project_root() / ".auth"
+
+
+def debug_dir() -> Path:
+    return project_root() / ".content-score" / "douyin-debug"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def doctor() -> int:
     print(f"python: {sys.version.split()[0]}")
+    print(f"project_root: {project_root()}")
+    print(f"auth_dir: {auth_dir()}")
     if sys.version_info < (3, 10):
         print("python_status: unsupported; use Python 3.10 or newer")
         return 1
@@ -65,16 +80,16 @@ def doctor() -> int:
     else:
         print("chromium: not detected")
         print("browser: python3 -m playwright install chromium")
-    print(f"auth_dir: {AUTH_DIR}")
     return 0
 
 
 async def login(timeout_s: int = 300) -> int:
     async_playwright = _load_async_playwright()
     async with async_playwright() as pw:
-        AUTH_DIR.mkdir(parents=True, exist_ok=True)
+        auth_path = auth_dir()
+        auth_path.mkdir(parents=True, exist_ok=True)
         context = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(AUTH_DIR),
+            user_data_dir=str(auth_path),
             headless=False,
             viewport={"width": 1440, "height": 900},
             args=["--disable-blink-features=AutomationControlled"],
@@ -99,9 +114,10 @@ async def fetch(raw_input: str, prediction_id: str, output: Path) -> int:
     parsed = parse_aweme_input(raw_input)
     async_playwright = _load_async_playwright()
     async with async_playwright() as pw:
-        AUTH_DIR.mkdir(parents=True, exist_ok=True)
+        auth_path = auth_dir()
+        auth_path.mkdir(parents=True, exist_ok=True)
         context = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(AUTH_DIR),
+            user_data_dir=str(auth_path),
             headless=False,
             viewport={"width": 1440, "height": 900},
             args=["--disable-blink-features=AutomationControlled"],
@@ -121,6 +137,7 @@ async def fetch(raw_input: str, prediction_id: str, output: Path) -> int:
     output.write_text(json.dumps([row], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"output: {output}")
     print(f"top_comments: {len(comments)}")
+    print("status: ok")
     return 0
 
 
@@ -181,12 +198,13 @@ async def _fetch_video_and_comments(context: Any, aweme_id: str) -> tuple[dict, 
                 await page.wait_for_timeout(1_500)
             video = _find_video(captured, aweme_id)
 
-        DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-        (DEBUG_DIR / "captured-response-count.txt").write_text(str(len(captured)), encoding="utf-8")
+        debug_path = debug_dir()
+        debug_path.mkdir(parents=True, exist_ok=True)
+        (debug_path / "captured-response-count.txt").write_text(str(len(captured)), encoding="utf-8")
         if video is None:
             raise RuntimeError(
                 "could not find required Douyin metrics in captured responses; "
-                f"debug data written under {DEBUG_DIR}"
+                f"debug data written under {debug_path}"
             )
         return video, _dedupe_comments(comments)
     finally:

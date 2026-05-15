@@ -30,6 +30,12 @@ class NormalizeTests(unittest.TestCase):
             "7444444444444444444",
         )
 
+    def test_parse_aweme_input_accepts_short_url_unchanged(self) -> None:
+        self.assertEqual(
+            parse_aweme_input("https://v.douyin.com/abc123/"),
+            "https://v.douyin.com/abc123/",
+        )
+
     def test_normalize_video_maps_required_metrics(self) -> None:
         video = normalize_video(
             {
@@ -68,6 +74,17 @@ class NormalizeTests(unittest.TestCase):
 
         self.assertEqual(comments, ["top", "middle"])
 
+    def test_normalize_comments_uses_like_count_when_digg_count_missing_or_none(self) -> None:
+        comments = normalize_comments(
+            [
+                {"text": "missing digg", "like_count": 10},
+                {"text": "none digg", "digg_count": None, "like_count": 20},
+                {"text": "zero digg", "digg_count": 0, "like_count": 30},
+            ]
+        )
+
+        self.assertEqual(comments, ["none digg", "missing digg", "zero digg"])
+
     def test_missing_required_metric_raises_clear_error(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing required metric: saves"):
             normalize_video(
@@ -77,6 +94,20 @@ class NormalizeTests(unittest.TestCase):
                         "digg_count": 80,
                         "comment_count": 12,
                         "share_count": 4,
+                    }
+                }
+            )
+
+    def test_non_numeric_required_metric_raises_clear_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not numeric"):
+            normalize_video(
+                {
+                    "statistics": {
+                        "play_count": "many",
+                        "digg_count": 80,
+                        "comment_count": 12,
+                        "share_count": 4,
+                        "collect_count": 9,
                     }
                 }
             )

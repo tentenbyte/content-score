@@ -60,7 +60,9 @@ def normalize_comments(raw_comments: list[dict], limit: int = 20) -> list[str]:
         text = str(text).strip()
         if not text:
             continue
-        likes = comment.get("digg_count", comment.get("like_count", 0))
+        likes = comment.get("digg_count")
+        if likes is None:
+            likes = comment.get("like_count", 0)
         try:
             like_count = _parse_count(likes, "comment likes")
         except ValueError:
