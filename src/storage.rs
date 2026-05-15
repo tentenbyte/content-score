@@ -228,6 +228,87 @@ pub fn insert_retro(conn: &Connection, input: &RetroInput) -> Result<i64> {
     Ok(conn.last_insert_rowid())
 }
 
+pub fn completed_samples(conn: &Connection) -> Result<Vec<crate::calibration::CompletedSample>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT p.scores_json, r.plays
+        FROM predictions p
+        JOIN retros r ON r.prediction_id = p.id
+        WHERE p.contaminated = 0 AND r.contaminated = 0
+        ORDER BY r.created_at ASC
+        "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let scores_json: String = row.get(0)?;
+        let plays: i64 = row.get(1)?;
+        Ok((scores_json, plays))
+    })?;
+
+    let mut samples = Vec::new();
+    for row in rows {
+        let (scores_json, plays) = row?;
+        samples.push(crate::calibration::CompletedSample {
+            scores: ScoreSet::from_json_str(&scores_json)?,
+            plays,
+        });
+    }
+    Ok(samples)
+}
+
+pub fn insert_upgrade_proposal(
+    conn: &Connection,
+    from_version: &str,
+    to_version: &str,
+    weights: &std::collections::BTreeMap<String, f64>,
+    rationale: &str,
+) -> Result<i64> {
+    conn.execute(
+        r#"
+        INSERT INTO upgrade_proposals
+            (from_version, to_version, weights_json, rationale, status, created_at)
+        VALUES (?1, ?2, ?3, ?4, 'proposed', ?5)
+        "#,
+        params![
+            from_version,
+            to_version,
+            serde_json::to_string(weights)?,
+            rationale,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn apply_upgrade_proposal(conn: &Connection, proposal_id: i64) -> Result<String> {
+    let (to_version, weights_json, status): (String, String, String) = conn.query_row(
+        r#"
+        SELECT to_version, weights_json, status
+        FROM upgrade_proposals
+        WHERE id = ?1
+        "#,
+        params![proposal_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if status != "proposed" {
+        anyhow::bail!("upgrade proposal #{proposal_id} is not proposed");
+    }
+
+    conn.execute("UPDATE rubric_versions SET active = 0", [])?;
+    conn.execute(
+        r#"
+        INSERT INTO rubric_versions (version, weights_json, active, created_at)
+        VALUES (?1, ?2, 1, ?3)
+        "#,
+        params![to_version, weights_json, Utc::now().to_rfc3339()],
+    )?;
+    conn.execute(
+        "UPDATE upgrade_proposals SET status = 'applied', applied_at = ?1 WHERE id = ?2",
+        params![Utc::now().to_rfc3339(), proposal_id],
+    )?;
+
+    Ok(to_version)
+}
+
 fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"

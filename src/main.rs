@@ -1,8 +1,10 @@
+mod calibration;
 mod dimensions;
 mod prediction;
 mod rubric;
 mod score;
 mod storage;
+mod upgrade;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -49,6 +51,13 @@ enum Commands {
         top_comments: Option<String>,
         #[arg(long)]
         notes: Option<String>,
+    },
+    Calibrate,
+    Upgrade {
+        #[arg(long)]
+        propose: bool,
+        #[arg(long)]
+        apply: Option<i64>,
     },
     Candidates {
         #[command(subcommand)]
@@ -173,6 +182,39 @@ fn main() -> Result<()> {
                 },
             )?;
             println!("retro recorded for {id}");
+        }
+        Commands::Calibrate => {
+            let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;
+            let samples = storage::completed_samples(&conn)?;
+            let report = calibration::analyze(&samples);
+            println!("{}", report.render());
+        }
+        Commands::Upgrade { propose, apply } => {
+            let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;
+            match (propose, apply) {
+                (true, None) => {
+                    let samples = storage::completed_samples(&conn)?;
+                    let report = calibration::analyze(&samples);
+                    let rubric = storage::active_rubric(&conn)?;
+                    let to_version = upgrade::next_version(&rubric.version);
+                    let weights = calibration::propose_weights(&rubric, &report);
+                    let rationale = report.render();
+                    let id = storage::insert_upgrade_proposal(
+                        &conn,
+                        &rubric.version,
+                        &to_version,
+                        &weights,
+                        &rationale,
+                    )?;
+                    println!("upgrade proposal #{id}: {} -> {}", rubric.version, to_version);
+                    println!("{rationale}");
+                }
+                (false, Some(id)) => {
+                    let version = storage::apply_upgrade_proposal(&conn, id)?;
+                    println!("active rubric: {version}");
+                }
+                _ => anyhow::bail!("use either upgrade --propose or upgrade --apply <id>"),
+            }
         }
         Commands::Candidates { command } => {
             let (_paths, conn) = storage::open_project(&std::env::current_dir()?)?;

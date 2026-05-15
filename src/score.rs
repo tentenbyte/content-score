@@ -52,6 +52,19 @@ impl ScoreSet {
         Ok(ScoreSet { scores })
     }
 
+    pub fn from_code_map(scores: BTreeMap<String, DimensionScore>) -> Result<ScoreSet> {
+        let mut parsed = BTreeMap::new();
+        for (code, score) in scores {
+            parsed.insert(Dimension::parse(&code)?, score);
+        }
+        ScoreSet::new(parsed)
+    }
+
+    pub fn from_json_str(input: &str) -> Result<ScoreSet> {
+        let scores = serde_json::from_str::<BTreeMap<String, DimensionScore>>(input)?;
+        ScoreSet::from_code_map(scores)
+    }
+
     pub fn get(&self, dimension: Dimension) -> u8 {
         self.scores
             .get(&dimension)
