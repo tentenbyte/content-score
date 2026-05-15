@@ -179,8 +179,7 @@ async def _fetch_video_and_comments(context: Any, aweme_id: str) -> tuple[dict, 
         await page.goto(CREATOR_CONTENT, wait_until="domcontentloaded", timeout=60_000)
         await page.wait_for_timeout(6_000)
         for _ in range(3):
-            await page.evaluate("window.scrollBy(0, 1400)")
-            await page.wait_for_timeout(1_500)
+            await _scroll_with_navigation_recovery(page, 1400, 1_500)
 
         video = _find_video(captured, aweme_id)
         if video is None:
@@ -194,8 +193,9 @@ async def _fetch_video_and_comments(context: Any, aweme_id: str) -> tuple[dict, 
                 except Exception:
                     pass
             for _ in range(12):
-                await page.evaluate("window.scrollBy(0, 1500)")
-                await page.wait_for_timeout(1_500)
+                if _find_video(captured, aweme_id) is not None:
+                    break
+                await _scroll_with_navigation_recovery(page, 1500, 1_500)
             video = _find_video(captured, aweme_id)
 
         debug_path = debug_dir()
@@ -209,6 +209,35 @@ async def _fetch_video_and_comments(context: Any, aweme_id: str) -> tuple[dict, 
         return video, _dedupe_comments(comments)
     finally:
         await page.close()
+
+
+async def _scroll_with_navigation_recovery(page: Any, pixels: int, wait_ms: int) -> bool:
+    try:
+        await page.evaluate(f"window.scrollBy(0, {pixels})")
+    except Exception as exc:
+        if not _is_transient_navigation_error(exc):
+            raise
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(wait_ms)
+        return False
+    await page.wait_for_timeout(wait_ms)
+    return True
+
+
+def _is_transient_navigation_error(exc: Exception) -> bool:
+    message = str(exc)
+    return any(
+        fragment in message
+        for fragment in (
+            "Execution context was destroyed",
+            "Cannot find context with specified id",
+            "Most likely because of a navigation",
+            "net::ERR_ABORTED",
+        )
+    )
 
 
 def _looks_like_video_response(url: str) -> bool:
