@@ -33,6 +33,13 @@ impl Rubric {
 
         weighted_sum / total_weight * 2.0
     }
+
+    pub fn weights_by_code(&self) -> BTreeMap<String, f64> {
+        self.weights
+            .iter()
+            .map(|(dimension, weight)| (dimension.code().to_string(), *weight))
+            .collect()
+    }
 }
 
 #[cfg(test)]
