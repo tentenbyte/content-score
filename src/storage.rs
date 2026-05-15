@@ -201,6 +201,15 @@ pub fn prediction_hash(conn: &Connection, id: &str) -> Result<String> {
     )?)
 }
 
+pub fn prediction_exists(conn: &Connection, id: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM predictions WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 #[derive(Debug, Clone)]
 pub struct RetroInput {
     pub prediction_id: String,
@@ -235,6 +244,22 @@ pub fn insert_retro(conn: &Connection, input: &RetroInput) -> Result<i64> {
         ],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+pub fn retro_exists(conn: &Connection, prediction_id: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM retros WHERE prediction_id = ?1",
+        params![prediction_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+pub fn delete_retros_for_prediction(conn: &Connection, prediction_id: &str) -> Result<usize> {
+    Ok(conn.execute(
+        "DELETE FROM retros WHERE prediction_id = ?1",
+        params![prediction_id],
+    )?)
 }
 
 pub fn completed_samples(conn: &Connection) -> Result<Vec<crate::calibration::CompletedSample>> {

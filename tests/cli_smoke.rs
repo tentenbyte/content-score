@@ -288,6 +288,40 @@ fn retro_import_json_records_rows() {
 }
 
 #[test]
+fn retro_import_rejects_duplicate_prediction_by_default() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+
+    let prediction_id = create_prediction(temp.path(), "duplicate.md", "普通经验分享，开头一般。");
+    write_retro_json(temp.path(), "first.json", &prediction_id, 1200);
+    write_retro_json(temp.path(), "second.json", &prediction_id, 1800);
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["retro", "import", "first.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("imported: 1"))
+        .stdout(predicate::str::contains("failed: 0"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["retro", "import", "second.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("imported: 0"))
+        .stdout(predicate::str::contains("failed: 1"))
+        .stdout(predicate::str::contains("already has a retro"));
+}
+
+#[test]
 fn calibrate_and_upgrade_work() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
@@ -430,4 +464,25 @@ fn create_prediction(root: &std::path::Path, file_name: &str, body: &str) -> Str
         .unwrap()
         .to_string_lossy()
         .to_string()
+}
+
+fn write_retro_json(root: &std::path::Path, file_name: &str, prediction_id: &str, plays: i64) {
+    fs::write(
+        root.join(file_name),
+        format!(
+            r#"[
+  {{
+    "prediction_id": "{prediction_id}",
+    "plays": {plays},
+    "likes": 120,
+    "comments": 18,
+    "shares": 7,
+    "saves": 11,
+    "top_comments": ["评论1", "评论2"],
+    "notes": "T+3"
+  }}
+]"#
+        ),
+    )
+    .unwrap();
 }

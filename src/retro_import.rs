@@ -20,6 +20,11 @@ pub struct ImportFailure {
     pub error: String,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImportOptions {
+    pub replace_existing: bool,
+}
+
 #[derive(Debug, Clone)]
 struct ImportRow {
     prediction_id: String,
@@ -58,6 +63,15 @@ struct JsonImportRow {
 }
 
 pub fn import_file(root: &Path, conn: &Connection, path: &Path) -> Result<ImportSummary> {
+    import_file_with_options(root, conn, path, ImportOptions::default())
+}
+
+pub fn import_file_with_options(
+    root: &Path,
+    conn: &Connection,
+    path: &Path,
+    options: ImportOptions,
+) -> Result<ImportSummary> {
     let rows = match path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -72,7 +86,7 @@ pub fn import_file(root: &Path, conn: &Connection, path: &Path) -> Result<Import
     for (index, row) in rows.into_iter().enumerate() {
         let row_number = index + 1;
         let prediction_id = row.prediction_id.clone();
-        match import_row(root, conn, row) {
+        match import_row(root, conn, row, options) {
             Ok(contaminated) => {
                 summary.imported += 1;
                 if contaminated {
@@ -135,10 +149,17 @@ fn read_json_rows(path: &Path) -> Result<Vec<ImportRow>> {
         .collect())
 }
 
-fn import_row(root: &Path, conn: &Connection, row: ImportRow) -> Result<bool> {
+fn import_row(
+    root: &Path,
+    conn: &Connection,
+    row: ImportRow,
+    options: ImportOptions,
+) -> Result<bool> {
     validate_row(&row)?;
-    let expected_hash = storage::prediction_hash(conn, &row.prediction_id)
-        .with_context(|| format!("prediction not found: {}", row.prediction_id))?;
+    if !storage::prediction_exists(conn, &row.prediction_id)? {
+        return Err(anyhow!("prediction not found: {}", row.prediction_id));
+    }
+    let expected_hash = storage::prediction_hash(conn, &row.prediction_id)?;
     let prediction_path = root
         .join("predictions")
         .join(format!("{}.md", row.prediction_id));
@@ -149,6 +170,16 @@ fn import_row(root: &Path, conn: &Connection, row: ImportRow) -> Result<bool> {
         )
     })?;
     let contaminated = expected_hash != actual_hash;
+
+    if storage::retro_exists(conn, &row.prediction_id)? {
+        if !options.replace_existing {
+            return Err(anyhow!(
+                "prediction already has a retro: {}",
+                row.prediction_id
+            ));
+        }
+        storage::delete_retros_for_prediction(conn, &row.prediction_id)?;
+    }
 
     storage::insert_retro(
         conn,
@@ -184,4 +215,107 @@ fn validate_row(row: &ImportRow) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{prediction, score, storage};
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn import_with_replace_existing_replaces_completed_sample() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        storage::init_project(root).unwrap();
+        let (_paths, conn) = storage::open_project(root).unwrap();
+        let prediction_id = create_prediction(root, &conn);
+
+        let first_path = root.join("first.json");
+        let second_path = root.join("second.json");
+        write_retro_json(&first_path, &prediction_id, 1200);
+        write_retro_json(&second_path, &prediction_id, 1800);
+
+        let first = import_file(root, &conn, &first_path).unwrap();
+        assert_eq!(first.imported, 1);
+        assert_eq!(first.failed, 0);
+
+        let second = import_file_with_options(
+            root,
+            &conn,
+            &second_path,
+            ImportOptions {
+                replace_existing: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(second.imported, 1);
+        assert_eq!(second.failed, 0);
+
+        let samples = storage::completed_samples(&conn).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].plays, 1800);
+    }
+
+    fn create_prediction(root: &Path, conn: &Connection) -> String {
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        let script_path = root.join("scripts/replace.md");
+        fs::write(&script_path, "普通经验分享，开头一般。").unwrap();
+
+        let rubric = storage::active_rubric(conn).unwrap();
+        let scores = score::parse_score_pairs("ER=4,HP=5,QL=3,NA=3,AB=4,SR=2,SAT=1").unwrap();
+        let composite = rubric.composite(&scores);
+        let draft = prediction::build_prediction(
+            root,
+            &script_path,
+            &rubric,
+            &scores,
+            composite,
+            "sample bet",
+            None,
+        )
+        .unwrap();
+        prediction::write_prediction(&draft).unwrap();
+
+        let script_ref = script_path.display().to_string();
+        storage::insert_prediction(
+            conn,
+            &storage::PredictionRecord {
+                id: &draft.id,
+                script_path: &script_ref,
+                script_hash: &draft.script_hash,
+                rubric: &rubric,
+                scores: &scores,
+                composite,
+                bet: "sample bet",
+                bucket: None,
+                prediction_hash: &draft.prediction_hash,
+            },
+        )
+        .unwrap();
+
+        draft.id
+    }
+
+    fn write_retro_json(path: &Path, prediction_id: &str, plays: i64) {
+        fs::write(
+            path,
+            format!(
+                r#"[
+  {{
+    "prediction_id": "{prediction_id}",
+    "plays": {plays},
+    "likes": 120,
+    "comments": 18,
+    "shares": 7,
+    "saves": 11,
+    "top_comments": ["评论1", "评论2"],
+    "notes": "T+3"
+  }}
+]"#
+            ),
+        )
+        .unwrap();
+    }
 }
