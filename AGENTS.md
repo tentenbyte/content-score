@@ -201,7 +201,7 @@ Current automated suite shape:
 
 - 13 Rust unit tests.
 - 28 Rust CLI smoke tests.
-- 9 Python adapter normalization tests under `adapters/douyin-session/tests`.
+- 10 Python adapter tests under `adapters/douyin-session/tests`.
 - Live Douyin login/fetch has not been verified in this environment because Playwright/Chromium/login state is not installed here.
 
 ## Prepared Goals

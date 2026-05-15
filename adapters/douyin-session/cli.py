@@ -291,9 +291,13 @@ def _find_cached_chromium() -> Path | None:
     for root in [path for path in cache_roots if path]:
         if not root.exists():
             continue
-        for candidate in root.glob("chromium*/chrome-linux/chrome"):
-            if candidate.exists():
-                return candidate
+        for pattern in (
+            "chromium*/chrome-linux/chrome",
+            "chromium*/chrome-linux64/chrome",
+        ):
+            for candidate in root.glob(pattern):
+                if candidate.exists():
+                    return candidate
     return None
 
 
