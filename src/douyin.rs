@@ -1,6 +1,7 @@
 use crate::{retro_import, storage};
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,12 +23,8 @@ pub enum DouyinCommand {
 
 pub fn handle(command: DouyinCommand) -> Result<()> {
     match command {
-        DouyinCommand::Doctor => {
-            anyhow::bail!("adapter checks are not implemented yet");
-        }
-        DouyinCommand::Login => {
-            anyhow::bail!("adapter login is not implemented yet");
-        }
+        DouyinCommand::Doctor => run_adapter_command("doctor"),
+        DouyinCommand::Login => run_adapter_command("login"),
         DouyinCommand::Fetch {
             prediction_id,
             input,
@@ -35,18 +32,24 @@ pub fn handle(command: DouyinCommand) -> Result<()> {
             dry_run,
             replace,
         } => {
-            if dry_run {
-                anyhow::bail!("--dry-run is not implemented yet");
+            if replace && no_import {
+                anyhow::bail!("--replace cannot be used with --no-import");
             }
-            if replace {
-                anyhow::bail!("--replace is not implemented yet");
+            if replace && dry_run {
+                anyhow::bail!("--replace cannot be used with --dry-run");
             }
-            fetch(prediction_id, input, no_import)
+            fetch(prediction_id, input, no_import, dry_run, replace)
         }
     }
 }
 
-fn fetch(prediction_id: String, input: String, no_import: bool) -> Result<()> {
+fn fetch(
+    prediction_id: String,
+    input: String,
+    no_import: bool,
+    dry_run: bool,
+    replace: bool,
+) -> Result<()> {
     let adapter_input = resolve_aweme_id(&input)?;
     let root = std::env::current_dir()?;
     let paths = storage::ProjectPaths::from_root(&root);
@@ -60,38 +63,28 @@ fn fetch(prediction_id: String, input: String, no_import: bool) -> Result<()> {
     if !storage::prediction_exists(&conn, &prediction_id)? {
         anyhow::bail!("prediction not found: {prediction_id}");
     }
+    let existing_retro = storage::retro_exists(&conn, &prediction_id)?;
+    if !no_import && !dry_run && !replace && existing_retro {
+        anyhow::bail!("prediction already has a retro: {prediction_id}");
+    }
+    let replacing_existing = replace && existing_retro;
 
-    let adapter_path = adapter_path()?;
-    let python = python_command(&root);
     let imports_dir = paths.app_dir.join("imports");
     std::fs::create_dir_all(&imports_dir)?;
     let output_path = imports_dir.join(format!("douyin-{prediction_id}.json"));
 
-    let output = Command::new(&python)
-        .arg(&adapter_path)
-        .arg("fetch")
-        .arg(&adapter_input)
-        .arg("--prediction-id")
-        .arg(&prediction_id)
-        .arg("--output")
-        .arg(&output_path)
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to launch Douyin adapter with {} {}",
-                python.display(),
-                adapter_path.display()
-            )
-        })?;
-
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    if !output.status.success() {
-        anyhow::bail!("Douyin adapter failed with status {}", output.status);
-    }
+    run_adapter(
+        &root,
+        fetch_adapter_args(&adapter_input, &prediction_id, &output_path),
+    )?;
 
     println!("json: {}", output_path.display());
     validate_adapter_output(&output_path, &prediction_id)?;
+    if dry_run {
+        println!("dry-run: yes");
+        println!("imported: no");
+        return Ok(());
+    }
     if no_import {
         println!("imported: no");
         return Ok(());
@@ -101,7 +94,9 @@ fn fetch(prediction_id: String, input: String, no_import: bool) -> Result<()> {
         &root,
         &conn,
         &output_path,
-        retro_import::ImportOptions::default(),
+        retro_import::ImportOptions {
+            replace_existing: replace,
+        },
     )?;
     for failure in &summary.failures {
         println!(
@@ -112,6 +107,9 @@ fn fetch(prediction_id: String, input: String, no_import: bool) -> Result<()> {
     println!("imported: {}", summary.imported);
     println!("failed: {}", summary.failed);
     println!("contaminated: {}", summary.contaminated);
+    if summary.imported > 0 && summary.failed == 0 && replacing_existing {
+        println!("replaced: yes");
+    }
     if summary.imported > 0 && summary.failed == 0 {
         println!("imported: yes");
         Ok(())
@@ -119,6 +117,51 @@ fn fetch(prediction_id: String, input: String, no_import: bool) -> Result<()> {
         println!("imported: no");
         anyhow::bail!("Douyin import failed")
     }
+}
+
+fn run_adapter_command(command: &str) -> Result<()> {
+    let root = std::env::current_dir()?;
+    run_adapter(&root, [OsString::from(command)])
+}
+
+fn fetch_adapter_args(
+    adapter_input: &str,
+    prediction_id: &str,
+    output_path: &Path,
+) -> Vec<OsString> {
+    vec![
+        OsString::from("fetch"),
+        OsString::from(adapter_input),
+        OsString::from("--prediction-id"),
+        OsString::from(prediction_id),
+        OsString::from("--output"),
+        output_path.as_os_str().to_os_string(),
+    ]
+}
+
+fn run_adapter<I>(root: &Path, args: I) -> Result<()>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let adapter_path = adapter_path()?;
+    let python = python_command(root);
+    let status = Command::new(&python)
+        .arg(&adapter_path)
+        .args(args)
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to launch Douyin adapter with {} {}",
+                python.display(),
+                adapter_path.display()
+            )
+        })?;
+
+    if !status.success() {
+        anyhow::bail!("Douyin adapter failed with status {status}");
+    }
+
+    Ok(())
 }
 
 fn validate_adapter_output(path: &Path, prediction_id: &str) -> Result<()> {
@@ -264,18 +307,5 @@ mod tests {
         let error = resolve_aweme_id("https://example.com/video/7333333333333333333").unwrap_err();
 
         assert!(error.to_string().contains("Douyin"));
-    }
-
-    #[test]
-    fn stubs_return_not_implemented_errors() {
-        let doctor_error = handle(DouyinCommand::Doctor).unwrap_err();
-        assert!(doctor_error
-            .to_string()
-            .contains("adapter checks are not implemented yet"));
-
-        let login_error = handle(DouyinCommand::Login).unwrap_err();
-        assert!(login_error
-            .to_string()
-            .contains("adapter login is not implemented yet"));
     }
 }

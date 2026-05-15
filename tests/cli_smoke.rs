@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use rusqlite::Connection;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
@@ -536,7 +537,7 @@ fn douyin_fetch_rejects_adapter_output_with_multiple_rows() {
 }
 
 #[test]
-fn douyin_fetch_dry_run_fails_before_adapter_or_import_output() {
+fn douyin_fetch_dry_run_invokes_adapter_writes_json_without_import() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
         .unwrap()
@@ -564,16 +565,71 @@ fn douyin_fetch_dry_run_fails_before_adapter_or_import_output() {
             "--dry-run",
         ])
         .assert()
+        .success()
+        .stdout(predicate::str::contains("aweme_id: 7333333333333333333"))
+        .stdout(predicate::str::contains(format!(
+            "json: {}",
+            output_path.display()
+        )))
+        .stdout(predicate::str::contains("dry-run: yes"))
+        .stdout(predicate::str::contains("imported: no"));
+
+    assert_eq!(
+        fs::read_to_string(marker_path).unwrap(),
+        "fetch:7333333333333333333"
+    );
+    assert!(output_path.exists());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("calibrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("samples: 0"));
+}
+
+#[test]
+fn douyin_fetch_duplicate_default_fails_before_adapter_execution() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id = create_prediction(temp.path(), "douyin-duplicate.md", "普通经验分享。");
+    write_retro_json(temp.path(), "existing.json", &prediction_id, 1200);
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["retro", "import", "existing.json"])
+        .assert()
+        .success();
+
+    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let marker_path = fake_douyin_adapter_marker(temp.path());
+    let output_path = temp
+        .path()
+        .join(".content-score/imports")
+        .join(format!("douyin-{prediction_id}.json"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args(["douyin", "fetch", &prediction_id, "7333333333333333333"])
+        .assert()
         .failure()
         .stdout(predicate::str::contains("aweme_id:").not())
-        .stderr(predicate::str::contains("--dry-run is not implemented yet"));
+        .stderr(predicate::str::contains("already has a retro"));
 
     assert!(!marker_path.exists());
     assert!(!output_path.exists());
 }
 
 #[test]
-fn douyin_fetch_replace_fails_before_adapter_or_import_output() {
+fn douyin_fetch_replace_replaces_existing_retro() {
     let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
         .unwrap()
@@ -582,12 +638,64 @@ fn douyin_fetch_replace_fails_before_adapter_or_import_output() {
         .assert()
         .success();
     let prediction_id = create_prediction(temp.path(), "douyin-replace.md", "普通经验分享。");
-    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let first_adapter = write_fake_douyin_adapter(temp.path(), 1200);
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &first_adapter)
+        .args(["douyin", "fetch", &prediction_id, "7333333333333333333"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("imported: yes"));
+
+    let second_adapter = write_fake_douyin_adapter(temp.path(), 1800);
     let marker_path = fake_douyin_adapter_marker(temp.path());
-    let output_path = temp
-        .path()
-        .join(".content-score/imports")
-        .join(format!("douyin-{prediction_id}.json"));
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &second_adapter)
+        .args([
+            "douyin",
+            "fetch",
+            &prediction_id,
+            "7333333333333333333",
+            "--replace",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("aweme_id: 7333333333333333333"))
+        .stdout(predicate::str::contains("imported: 1"))
+        .stdout(predicate::str::contains("replaced: yes"))
+        .stdout(predicate::str::contains("imported: yes"));
+
+    assert_eq!(
+        fs::read_to_string(marker_path).unwrap(),
+        "fetch:7333333333333333333"
+    );
+    assert_retro_plays(temp.path(), &prediction_id, 1, 1800, 1800);
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("calibrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("samples: 1"));
+}
+
+#[test]
+fn douyin_fetch_replace_without_existing_retro_does_not_claim_replaced() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id = create_prediction(temp.path(), "douyin-replace-new.md", "普通经验分享。");
+    let adapter = write_fake_douyin_adapter(temp.path(), 1800);
 
     Command::cargo_bin("content-score")
         .unwrap()
@@ -601,30 +709,120 @@ fn douyin_fetch_replace_fails_before_adapter_or_import_output() {
             "--replace",
         ])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains("aweme_id:").not())
-        .stderr(predicate::str::contains("--replace is not implemented yet"));
+        .success()
+        .stdout(predicate::str::contains("imported: 1"))
+        .stdout(predicate::str::contains("replaced: yes").not())
+        .stdout(predicate::str::contains("imported: yes"));
 
-    assert!(!marker_path.exists());
-    assert!(!output_path.exists());
+    assert_retro_plays(temp.path(), &prediction_id, 1, 1800, 1800);
 }
 
 #[test]
-fn douyin_fetch_parses_unimplemented_flags_but_requires_project() {
+fn douyin_fetch_rejects_replace_with_no_import() {
+    let temp = tempdir().unwrap();
     Command::cargo_bin("content-score")
         .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id =
+        create_prediction(temp.path(), "douyin-replace-no-import.md", "普通经验分享。");
+    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let marker_path = fake_douyin_adapter_marker(temp.path());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
         .args([
             "douyin",
             "fetch",
-            "pred_1",
+            &prediction_id,
             "7333333333333333333",
-            "--no-import",
-            "--dry-run",
             "--replace",
+            "--no-import",
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("--dry-run is not implemented yet"));
+        .stdout(predicate::str::contains("aweme_id:").not())
+        .stderr(predicate::str::contains(
+            "--replace cannot be used with --no-import",
+        ));
+
+    assert!(!marker_path.exists());
+}
+
+#[test]
+fn douyin_fetch_rejects_replace_with_dry_run() {
+    let temp = tempdir().unwrap();
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("init")
+        .assert()
+        .success();
+    let prediction_id =
+        create_prediction(temp.path(), "douyin-replace-dry-run.md", "普通经验分享。");
+    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let marker_path = fake_douyin_adapter_marker(temp.path());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args([
+            "douyin",
+            "fetch",
+            &prediction_id,
+            "7333333333333333333",
+            "--replace",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("aweme_id:").not())
+        .stderr(predicate::str::contains(
+            "--replace cannot be used with --dry-run",
+        ));
+
+    assert!(!marker_path.exists());
+}
+
+#[test]
+fn douyin_doctor_delegates_to_adapter_and_streams_output() {
+    let temp = tempdir().unwrap();
+    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let marker_path = fake_douyin_adapter_marker(temp.path());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args(["douyin", "doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("doctor: ok"));
+
+    assert_eq!(fs::read_to_string(marker_path).unwrap(), "doctor");
+}
+
+#[test]
+fn douyin_login_delegates_to_adapter_and_streams_output() {
+    let temp = tempdir().unwrap();
+    let adapter = write_fake_douyin_adapter(temp.path(), 1600);
+    let marker_path = fake_douyin_adapter_marker(temp.path());
+
+    Command::cargo_bin("content-score")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("CONTENT_SCORE_DOUYIN_ADAPTER", &adapter)
+        .args(["douyin", "login"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("login: ok"));
+
+    assert_eq!(fs::read_to_string(marker_path).unwrap(), "login");
 }
 
 #[test]
@@ -843,6 +1041,8 @@ import json
 
 parser = argparse.ArgumentParser()
 subparsers = parser.add_subparsers(dest="command", required=True)
+subparsers.add_parser("doctor")
+subparsers.add_parser("login")
 fetch = subparsers.add_parser("fetch")
 fetch.add_argument("input")
 fetch.add_argument("--prediction-id", required=True)
@@ -850,7 +1050,18 @@ fetch.add_argument("--output", required=True)
 args = parser.parse_args()
 
 with open({marker}, "w", encoding="utf-8") as marker:
-    marker.write(args.input)
+    if args.command == "fetch":
+        marker.write(f"fetch:{{args.input}}")
+    else:
+        marker.write(args.command)
+
+if args.command == "doctor":
+    print("doctor: ok")
+    raise SystemExit(0)
+
+if args.command == "login":
+    print("login: ok")
+    raise SystemExit(0)
 
 rows_json = {rows_json}.replace("__REQUESTED_PREDICTION_ID__", args.prediction_id)
 with open(args.output, "w", encoding="utf-8") as handle:
@@ -865,4 +1076,27 @@ print(f"aweme_id: {{args.input}}")
 
 fn fake_douyin_adapter_marker(root: &std::path::Path) -> PathBuf {
     root.join("fake_douyin_adapter.invoked")
+}
+
+fn assert_retro_plays(
+    root: &std::path::Path,
+    prediction_id: &str,
+    expected_count: i64,
+    expected_min: i64,
+    expected_max: i64,
+) {
+    let conn = Connection::open(root.join(".content-score/content.sqlite")).unwrap();
+    let (count, min_plays, max_plays): (i64, i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(MIN(plays), 0), COALESCE(MAX(plays), 0) \
+             FROM retros WHERE prediction_id = ?1",
+            [prediction_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(
+        (count, min_plays, max_plays),
+        (expected_count, expected_min, expected_max)
+    );
 }
